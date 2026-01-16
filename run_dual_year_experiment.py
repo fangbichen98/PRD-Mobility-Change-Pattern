@@ -208,20 +208,24 @@ def run_dual_year_experiment(
     logger.info("=" * 80)
 
     if model_type == 'dual_branch':
+        # CRITICAL FIX: spatial_input_size should be features per time step (10), not flattened (168*10)
+        # DySAT will receive 3D input: (num_nodes, time_steps, features) -> (time_steps, num_nodes, features)
         model = DualBranchSTModel(
-            temporal_input_size=10,
-            spatial_input_size=168 * 10
+            temporal_input_size=10,  # 10 features per time step
+            spatial_input_size=10    # 10 features per time step (NOT 168*10)
         )
     elif model_type == 'lstm':
         model = BaselineLSTM(input_size=10)
     elif model_type == 'gat':
-        model = BaselineGAT(input_size=168 * 10)
+        # GAT also needs to handle 3D input now
+        model = BaselineGAT(input_size=10)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
     logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
     logger.info(f"Input features: 10 (2021_in, 2021_out, 2024_in, 2024_out, diff_in, diff_out, rel_in, rel_out, total_2021, total_2024)")
-    logger.info(f"Feature usage: Both temporal (LSTM) and spatial (DySAT) branches use the same 10 features")
+    logger.info(f"Temporal branch: (batch, 168, 10) -> LSTM+SPP")
+    logger.info(f"Spatial branch: (900, 168, 10) -> transpose -> (168, 900, 10) -> DySAT with temporal attention")
 
     # Train
     logger.info("=" * 80)

@@ -194,7 +194,10 @@ class DualYearDataProcessor:
         logger.info("Computing temporal change features (using raw values for relative change)")
 
         change_features = {}
+        all_rel_changes = []  # Collect all relative changes for global normalization
 
+        # First pass: compute relative changes and collect for global statistics
+        temp_rel_changes = {}
         for grid_id in flows_2021_raw.keys():
             if grid_id not in flows_2024_raw:
                 logger.warning(f"Grid {grid_id} not found in 2024 data, skipping")
@@ -204,6 +207,28 @@ class DualYearDataProcessor:
             flow_2021_raw = flows_2021_raw[grid_id]  # (168, 2)
             flow_2024_raw = flows_2024_raw[grid_id]  # (168, 2)
 
+            # Relative change (on RAW values to avoid Z-score division issues)
+            epsilon = 1e-6
+            rel_change_raw = (flow_2024_raw - flow_2021_raw) / (flow_2021_raw + epsilon)  # (168, 2)
+
+            # Clip extreme values BEFORE normalization
+            rel_change_raw = np.clip(rel_change_raw, -10, 10)
+
+            temp_rel_changes[grid_id] = rel_change_raw
+            all_rel_changes.append(rel_change_raw)
+
+        # Compute global statistics for relative change normalization
+        all_rel_changes = np.concatenate(all_rel_changes, axis=0)
+        rel_change_mean = all_rel_changes.mean()
+        rel_change_std = all_rel_changes.std() + 1e-6
+
+        logger.info(f"Relative change statistics - Mean: {rel_change_mean:.4f}, Std: {rel_change_std:.4f}")
+
+        # Second pass: normalize and create final features
+        for grid_id in flows_2021_raw.keys():
+            if grid_id not in flows_2024_raw:
+                continue
+
             # Get normalized flows for direct features
             flow_2021_norm = flows_2021_norm[grid_id]  # (168, 2)
             flow_2024_norm = flows_2024_norm[grid_id]  # (168, 2)
@@ -211,15 +236,8 @@ class DualYearDataProcessor:
             # 1. Absolute difference (on normalized values)
             diff_norm = flow_2024_norm - flow_2021_norm  # (168, 2)
 
-            # 2. Relative change (on RAW values to avoid Z-score division issues)
-            epsilon = 1e-6
-            rel_change_raw = (flow_2024_raw - flow_2021_raw) / (flow_2021_raw + epsilon)  # (168, 2)
-
-            # Clip extreme values and normalize relative change
-            rel_change_raw = np.clip(rel_change_raw, -10, 10)  # Clip to reasonable range
-            rel_change_mean = rel_change_raw.mean()
-            rel_change_std = rel_change_raw.std() + epsilon
-            rel_change_norm = (rel_change_raw - rel_change_mean) / rel_change_std
+            # 2. Normalize relative change using GLOBAL statistics
+            rel_change_norm = (temp_rel_changes[grid_id] - rel_change_mean) / rel_change_std
 
             # 3. Total flow volumes (normalized)
             total_2021_norm = flow_2021_norm.sum(axis=1, keepdims=True)  # (168, 1)
