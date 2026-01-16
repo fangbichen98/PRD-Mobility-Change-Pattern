@@ -1,0 +1,18 @@
+# 忽略数据文件
+data/
+
+# 可选：忽略输出结果
+outputs/
+results/
+
+# Python 常见忽略项
+__pycache__/
+*.pyc
+.env
+.ipynb_checkpoints/
+.claude
+checkpoints/
+.conda/
+
+# VS Code
+.vscode/
