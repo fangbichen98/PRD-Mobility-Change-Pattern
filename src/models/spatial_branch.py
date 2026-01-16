@@ -175,7 +175,7 @@ class DySATNet(nn.Module):
         Forward pass
 
         Args:
-            x: Node features (num_nodes, input_size) or (num_time_steps, num_nodes, input_size)
+            x: Node features (num_nodes, input_size) or (num_nodes, time_steps, input_size)
             edge_index: Edge indices (2, num_edges) or list of edge indices for each time step
             edge_attr: Edge attributes
             batch_time_steps: Number of time steps in batch (for temporal attention)
@@ -183,12 +183,15 @@ class DySATNet(nn.Module):
         Returns:
             Node embeddings (num_nodes, output_size)
         """
-        # Check if input is temporal
+        # Check if input is temporal (3D)
         is_temporal = len(x.shape) == 3
 
         if is_temporal:
-            # Process each time step
-            num_time_steps, num_nodes, input_size = x.size()
+            # Input is (num_nodes, time_steps, input_size)
+            # Transpose to (time_steps, num_nodes, input_size) for processing
+            num_nodes, num_time_steps, input_size = x.size()
+            x = x.transpose(0, 1)  # Now (time_steps, num_nodes, input_size)
+
             temporal_embeddings = []
 
             for t in range(num_time_steps):
@@ -283,14 +286,15 @@ class SpatialBranch(nn.Module):
         Forward pass
 
         Args:
-            x: Node features
+            x: Node features (num_nodes, time_steps, features) for temporal DySAT
             edge_index: Edge indices
             edge_attr: Edge attributes
 
         Returns:
             Spatial features (num_nodes, output_size)
         """
-        # Extract spatial features
+        # Extract spatial features using DySAT with temporal attention
+        # x should be (num_nodes, time_steps, features) for temporal processing
         spatial_features = self.dysat(x, edge_index, edge_attr)
 
         # Project to output size

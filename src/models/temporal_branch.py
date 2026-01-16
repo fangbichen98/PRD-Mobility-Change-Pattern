@@ -35,12 +35,9 @@ class SpatialPyramidPooling(nn.Module):
         pooled_features = []
 
         for level in self.levels:
-            # Calculate kernel size and stride for this level
-            kernel_size = length // level
-            stride = length // level
-
-            # Apply max pooling
-            pooled = F.max_pool1d(x, kernel_size=kernel_size, stride=stride)
+            # CRITICAL FIX: Use adaptive pooling to avoid dimension mismatch issues
+            # This ensures output size is exactly 'level' regardless of input length
+            pooled = F.adaptive_max_pool1d(x, output_size=level)
 
             # Flatten and append
             pooled = pooled.view(batch_size, -1)

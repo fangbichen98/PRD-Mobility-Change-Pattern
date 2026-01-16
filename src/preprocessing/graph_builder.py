@@ -64,23 +64,29 @@ class SpatialGraphBuilder:
 
         return edge_index, edge_weights
 
-    def build_flow_graph(self, od_df: pd.DataFrame, threshold: float = 0.1) -> Tuple[np.ndarray, np.ndarray]:
+    def build_flow_graph(self, od_df: pd.DataFrame, threshold: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
         """
         Build graph based on OD flow patterns
 
+        CRITICAL FIX: Use raw num_total values instead of normalized values.
+        Edge weights should represent actual connection strength (non-negative).
+
         Args:
             od_df: OD flow DataFrame
-            threshold: Minimum normalized flow to create edge
+            threshold: Minimum raw flow to create edge (default 0 to include all positive flows)
 
         Returns:
             edge_index: Edge indices (2, num_edges)
-            edge_weights: Edge weights based on flow volume
+            edge_weights: Edge weights based on flow volume (non-negative)
         """
-        logger.info(f"Building flow graph with threshold={threshold}")
+        logger.info(f"Building flow graph with threshold={threshold} (using raw flow values)")
+
+        # Use raw num_total instead of normalized values
+        flow_column = 'num_total' if 'num_total' in od_df.columns else 'num_total_normalized'
 
         # Aggregate flows between grid pairs
-        flow_agg = od_df.groupby(['o_grid_500', 'd_grid_500'])['num_total_normalized'].sum().reset_index()
-        flow_agg = flow_agg[flow_agg['num_total_normalized'] >= threshold]
+        flow_agg = od_df.groupby(['o_grid_500', 'd_grid_500'])[flow_column].sum().reset_index()
+        flow_agg = flow_agg[flow_agg[flow_column] > threshold]  # Only positive flows
 
         # Convert grid IDs to indices
         edge_list = []
@@ -95,7 +101,7 @@ class SpatialGraphBuilder:
                 d_idx = self.grid_id_to_idx[d_grid]
 
                 edge_list.append([o_idx, d_idx])
-                edge_weights.append(row['num_total_normalized'])
+                edge_weights.append(row[flow_column])
 
         edge_index = np.array(edge_list).T if edge_list else np.zeros((2, 0))
         edge_weights = np.array(edge_weights) if edge_weights else np.array([])

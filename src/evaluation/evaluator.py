@@ -211,15 +211,17 @@ class Evaluator:
 
         plt.close()
 
-    def generate_report(self, results, model_name='model'):
+    def generate_report(self, results, model_name='model', output_dir=None):
         """
         Generate comprehensive evaluation report
 
         Args:
             results: Evaluation results dictionary
             model_name: Name of the model
+            output_dir: Optional directory to override self.output_dir
         """
-        report_dir = os.path.join(self.output_dir, 'evaluation_reports')
+        base_dir = output_dir if output_dir is not None else self.output_dir
+        report_dir = os.path.join(base_dir, 'evaluation_reports')
         os.makedirs(report_dir, exist_ok=True)
 
         # Save metrics to file

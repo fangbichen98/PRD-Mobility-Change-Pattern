@@ -143,7 +143,7 @@ class DualBranchSTModel(nn.Module):
 
         Args:
             temporal_input: Temporal features (batch_size, seq_len, temporal_input_size)
-            spatial_input: Spatial features for ALL nodes (num_nodes, spatial_input_size)
+            spatial_input: Spatial features for ALL nodes (num_nodes, time_steps, features) - 3D for DySAT
             edge_index: Graph edge indices (2, num_edges)
             edge_attr: Edge attributes
             node_indices: Indices of nodes in this batch (batch_size,)
@@ -155,6 +155,7 @@ class DualBranchSTModel(nn.Module):
         temporal_features = self.temporal_branch(temporal_input)
 
         # Extract spatial features for ALL nodes
+        # spatial_input is now (num_nodes, time_steps, features) for DySAT temporal attention
         all_spatial_features = self.spatial_branch(spatial_input, edge_index, edge_attr)
 
         # Select spatial features for batch nodes

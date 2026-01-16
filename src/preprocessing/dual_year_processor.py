@@ -131,13 +131,14 @@ class DualYearDataProcessor:
 
         return od_df
 
-    def aggregate_grid_flows(self, od_df, grid_ids):
+    def aggregate_grid_flows(self, od_df, grid_ids, use_raw=False):
         """
         Aggregate inflow and outflow for each grid over time
 
         Args:
             od_df: OD flow DataFrame
             grid_ids: List of grid IDs to aggregate
+            use_raw: If True, use raw num_total instead of normalized values
 
         Returns:
             Dictionary mapping grid_id to temporal flow array (time_steps, 2)
@@ -149,15 +150,18 @@ class DualYearDataProcessor:
 
         grid_flows = {}
 
+        # Choose which column to use
+        flow_column = 'num_total' if use_raw else 'num_total_normalized'
+
         for grid_id in tqdm(grid_ids, desc="Processing grids"):
             # Initialize flow array
             flow_array = np.zeros((time_steps, 2))  # (time, [inflow, outflow])
 
             # Get inflow (this grid as destination)
-            inflow = od_df[od_df['d_grid_500'] == grid_id].groupby('time')['num_total_normalized'].sum()
+            inflow = od_df[od_df['d_grid_500'] == grid_id].groupby('time')[flow_column].sum()
 
             # Get outflow (this grid as origin)
-            outflow = od_df[od_df['o_grid_500'] == grid_id].groupby('time')['num_total_normalized'].sum()
+            outflow = od_df[od_df['o_grid_500'] == grid_id].groupby('time')[flow_column].sum()
 
             # Fill flow array
             for t in range(time_steps):
@@ -170,50 +174,66 @@ class DualYearDataProcessor:
 
         return grid_flows
 
-    def compute_temporal_change_features(self, flows_2021, flows_2024):
+    def compute_temporal_change_features(self, flows_2021_raw, flows_2024_raw,
+                                        flows_2021_norm, flows_2024_norm):
         """
         Compute temporal change features between two years
 
+        CRITICAL FIX: Compute relative change on RAW values, then normalize the result.
+        This avoids the mathematical error of computing ratios on Z-scores.
+
         Args:
-            flows_2021: Grid flows for 2021 {grid_id: array(168, 2)}
-            flows_2024: Grid flows for 2024 {grid_id: array(168, 2)}
+            flows_2021_raw: Raw grid flows for 2021 {grid_id: array(168, 2)}
+            flows_2024_raw: Raw grid flows for 2024 {grid_id: array(168, 2)}
+            flows_2021_norm: Normalized grid flows for 2021 {grid_id: array(168, 2)}
+            flows_2024_norm: Normalized grid flows for 2024 {grid_id: array(168, 2)}
 
         Returns:
             Dictionary with change features for each grid
         """
-        logger.info("Computing temporal change features")
+        logger.info("Computing temporal change features (using raw values for relative change)")
 
         change_features = {}
 
-        for grid_id in flows_2021.keys():
-            if grid_id not in flows_2024:
+        for grid_id in flows_2021_raw.keys():
+            if grid_id not in flows_2024_raw:
                 logger.warning(f"Grid {grid_id} not found in 2024 data, skipping")
                 continue
 
-            flow_2021 = flows_2021[grid_id]  # (168, 2)
-            flow_2024 = flows_2024[grid_id]  # (168, 2)
+            # Get raw flows for computing relative change
+            flow_2021_raw = flows_2021_raw[grid_id]  # (168, 2)
+            flow_2024_raw = flows_2024_raw[grid_id]  # (168, 2)
 
-            # Compute change features
-            # 1. Absolute difference
-            diff = flow_2024 - flow_2021  # (168, 2)
+            # Get normalized flows for direct features
+            flow_2021_norm = flows_2021_norm[grid_id]  # (168, 2)
+            flow_2024_norm = flows_2024_norm[grid_id]  # (168, 2)
 
-            # 2. Relative change (avoid division by zero)
+            # 1. Absolute difference (on normalized values)
+            diff_norm = flow_2024_norm - flow_2021_norm  # (168, 2)
+
+            # 2. Relative change (on RAW values to avoid Z-score division issues)
             epsilon = 1e-6
-            rel_change = diff / (np.abs(flow_2021) + epsilon)  # (168, 2)
+            rel_change_raw = (flow_2024_raw - flow_2021_raw) / (flow_2021_raw + epsilon)  # (168, 2)
 
-            # 3. Total flow volumes
-            total_2021 = flow_2021.sum(axis=1, keepdims=True)  # (168, 1)
-            total_2024 = flow_2024.sum(axis=1, keepdims=True)  # (168, 1)
+            # Clip extreme values and normalize relative change
+            rel_change_raw = np.clip(rel_change_raw, -10, 10)  # Clip to reasonable range
+            rel_change_mean = rel_change_raw.mean()
+            rel_change_std = rel_change_raw.std() + epsilon
+            rel_change_norm = (rel_change_raw - rel_change_mean) / rel_change_std
 
-            # 4. Concatenate: [2021_flow, 2024_flow, diff, rel_change, total_2021, total_2024]
+            # 3. Total flow volumes (normalized)
+            total_2021_norm = flow_2021_norm.sum(axis=1, keepdims=True)  # (168, 1)
+            total_2024_norm = flow_2024_norm.sum(axis=1, keepdims=True)  # (168, 1)
+
+            # 4. Concatenate: [2021_flow_norm, 2024_flow_norm, diff_norm, rel_change_norm, total_2021_norm, total_2024_norm]
             # Shape: (168, 10) = (168, 2+2+2+2+1+1)
             combined = np.concatenate([
-                flow_2021,      # (168, 2)
-                flow_2024,      # (168, 2)
-                diff,           # (168, 2)
-                rel_change,     # (168, 2)
-                total_2021,     # (168, 1)
-                total_2024      # (168, 1)
+                flow_2021_norm,      # (168, 2) - normalized
+                flow_2024_norm,      # (168, 2) - normalized
+                diff_norm,           # (168, 2) - normalized difference
+                rel_change_norm,     # (168, 2) - normalized relative change (computed from raw)
+                total_2021_norm,     # (168, 1) - normalized total
+                total_2024_norm      # (168, 1) - normalized total
             ], axis=1)
 
             change_features[grid_id] = combined
@@ -253,13 +273,22 @@ class DualYearDataProcessor:
         od_2024, norm_params_2024 = self.normalize_flow(od_2024)
         od_2024 = self.build_temporal_features(od_2024)
 
-        # Aggregate flows for each year
+        # Aggregate flows for each year (both raw and normalized)
         labeled_grid_ids = list(sampled_grid_ids)
-        flows_2021 = self.aggregate_grid_flows(od_2021, labeled_grid_ids)
-        flows_2024 = self.aggregate_grid_flows(od_2024, labeled_grid_ids)
 
-        # Compute change features
-        change_features = self.compute_temporal_change_features(flows_2021, flows_2024)
+        # Raw flows for computing relative change
+        flows_2021_raw = self.aggregate_grid_flows(od_2021, labeled_grid_ids, use_raw=True)
+        flows_2024_raw = self.aggregate_grid_flows(od_2024, labeled_grid_ids, use_raw=True)
+
+        # Normalized flows for model input
+        flows_2021_norm = self.aggregate_grid_flows(od_2021, labeled_grid_ids, use_raw=False)
+        flows_2024_norm = self.aggregate_grid_flows(od_2024, labeled_grid_ids, use_raw=False)
+
+        # Compute change features (using both raw and normalized)
+        change_features = self.compute_temporal_change_features(
+            flows_2021_raw, flows_2024_raw,
+            flows_2021_norm, flows_2024_norm
+        )
 
         logger.info(f"\nDual-year data preparation completed:")
         logger.info(f"  - 2021 OD records: {len(od_2021)}")
@@ -269,8 +298,8 @@ class DualYearDataProcessor:
         return {
             'od_2021': od_2021,
             'od_2024': od_2024,
-            'flows_2021': flows_2021,
-            'flows_2024': flows_2024,
+            'flows_2021': flows_2021_norm,  # Return normalized for consistency
+            'flows_2024': flows_2024_norm,
             'change_features': change_features,
             'norm_params_2021': norm_params_2021,
             'norm_params_2024': norm_params_2024
@@ -338,8 +367,8 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=100):
     edge_index, edge_weights = graph_builder.build_hybrid_graph(dual_year_data['od_2024'])
 
     # Create grid_id to index mapping
-    labeled_grid_ids = list(labels.keys())
-    grid_id_to_idx = {gid: idx for idx, gid in enumerate(labeled_grid_ids)}
+    # CRITICAL FIX: Use the mapping from graph_builder to ensure consistency with edge_index
+    grid_id_to_idx = graph_builder.grid_id_to_idx
 
     logger.info(f"\nComplete data preparation:")
     logger.info(f"  - Total grids: {len(labels)}")

@@ -333,13 +333,15 @@ def create_data_loaders(dataset, edge_index, edge_attr, grid_id_to_idx,
     logger.info(f"Dataset split - Train: {train_size}, Val: {val_size}, Test: {test_size}")
 
     # Build full spatial feature matrix for all nodes
+    # CRITICAL FIX: Keep spatial features as 2D (time_steps, features) for DySAT temporal attention
     num_nodes = len(grid_id_to_idx)
-    spatial_dim = dataset.grid_flows[dataset.grid_ids[0]].shape[0] * dataset.grid_flows[dataset.grid_ids[0]].shape[1]
-    all_spatial_features = torch.zeros(num_nodes, spatial_dim)
+    sample_flow = dataset.grid_flows[dataset.grid_ids[0]]
+    time_steps, num_features = sample_flow.shape
+    all_spatial_features = torch.zeros(num_nodes, time_steps, num_features)
 
     for grid_id, node_idx in grid_id_to_idx.items():
         if grid_id in dataset.grid_flows:
-            all_spatial_features[node_idx] = torch.FloatTensor(dataset.grid_flows[grid_id].flatten())
+            all_spatial_features[node_idx] = torch.FloatTensor(dataset.grid_flows[grid_id])
 
     # Create collator
     collator = GraphBatchCollator(edge_index, edge_attr, grid_id_to_idx, all_spatial_features)

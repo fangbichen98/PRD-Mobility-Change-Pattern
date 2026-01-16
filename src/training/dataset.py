@@ -43,7 +43,7 @@ class MobilityDataset(Dataset):
 
         Returns:
             temporal_features: Temporal flow data (seq_len, 2)
-            spatial_features: Flattened temporal flow for spatial branch (seq_len * 2,)
+            spatial_features: Temporal flow for spatial branch (seq_len, 2) - NOT flattened
             label: Class label (0-8)
             grid_id: Grid ID
         """
@@ -52,8 +52,9 @@ class MobilityDataset(Dataset):
         # Get temporal features
         temporal_features = self.grid_flows[grid_id]  # (seq_len, 2)
 
-        # Create spatial features (flattened temporal features)
-        spatial_features = temporal_features.flatten()  # (seq_len * 2,)
+        # CRITICAL FIX: Keep spatial features as 2D for DySAT temporal processing
+        # Do NOT flatten - DySAT needs (time_steps, features) to use temporal attention
+        spatial_features = temporal_features  # (seq_len, 2)
 
         # Get label
         label = self.labels[grid_id]
@@ -106,12 +107,12 @@ class GraphBatchCollator:
             node_indices = None
 
         return {
-            'temporal': temporal_batch,
-            'spatial': spatial_batch,
+            'temporal': temporal_batch,  # (batch_size, time_steps, features)
+            'spatial': spatial_batch,    # (batch_size, time_steps, features) - NOT flattened
             'labels': label_batch,
             'grid_ids': grid_ids,
             'node_indices': node_indices,
             'edge_index': self.edge_index,
             'edge_attr': self.edge_attr,
-            'all_spatial_features': self.all_spatial_features
+            'all_spatial_features': self.all_spatial_features  # (num_nodes, time_steps, features)
         }
