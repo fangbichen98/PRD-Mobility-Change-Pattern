@@ -1,0 +1,84 @@
+INFO:__main__:SMALL-SCALE MOBILITY PATTERN CLASSIFICATION EXPERIMENT
+INFO:src.training.trainer:Epoch 1/50
+INFO:src.training.trainer:  Train - Loss: 2.1883, Acc: 0.1587, F1: 0.1387
+INFO:src.training.trainer:  Val   - Loss: 2.0693, Acc: 0.1222, F1: 0.1228
+INFO:src.training.trainer:  Saved best model (Acc: 0.1222, F1: 0.1228)
+INFO:src.training.trainer:Epoch 2/50
+INFO:src.training.trainer:  Train - Loss: 2.0679, Acc: 0.2206, F1: 0.1969
+INFO:src.training.trainer:  Val   - Loss: 1.9468, Acc: 0.1444, F1: 0.1009
+INFO:src.training.trainer:  Saved best model (Acc: 0.1444, F1: 0.1009)
+INFO:src.training.trainer:Epoch 3/50
+INFO:src.training.trainer:  Train - Loss: 2.1461, Acc: 0.2032, F1: 0.1856
+INFO:src.training.trainer:  Val   - Loss: 2.0236, Acc: 0.2556, F1: 0.1910
+INFO:src.training.trainer:  Saved best model (Acc: 0.2556, F1: 0.1910)
+INFO:src.training.trainer:Epoch 4/50
+INFO:src.training.trainer:  Train - Loss: 1.9891, Acc: 0.2714, F1: 0.2490
+INFO:src.training.trainer:  Val   - Loss: 1.8835, Acc: 0.3111, F1: 0.2441
+INFO:src.training.trainer:  Saved best model (Acc: 0.3111, F1: 0.2441)
+INFO:src.training.trainer:Epoch 5/50
+INFO:src.training.trainer:  Train - Loss: 1.9379, Acc: 0.3095, F1: 0.2823
+INFO:src.training.trainer:  Val   - Loss: 1.6639, Acc: 0.3889, F1: 0.3631
+INFO:src.training.trainer:  Saved best model (Acc: 0.3889, F1: 0.3631)
+INFO:src.training.trainer:Epoch 6/50
+INFO:src.training.trainer:  Train - Loss: 1.8880, Acc: 0.2952, F1: 0.2854
+INFO:src.training.trainer:  Val   - Loss: 1.9400, Acc: 0.2444, F1: 0.2098
+INFO:src.training.trainer:Epoch 7/50
+INFO:src.training.trainer:  Train - Loss: 1.8885, Acc: 0.3048, F1: 0.2784
+INFO:src.training.trainer:  Val   - Loss: 1.7477, Acc: 0.2889, F1: 0.2492
+INFO:src.training.trainer:Epoch 8/50
+INFO:src.training.trainer:  Train - Loss: 2.0626, Acc: 0.2476, F1: 0.2198
+INFO:src.training.trainer:  Val   - Loss: 2.0992, Acc: 0.2111, F1: 0.1634
+INFO:src.training.trainer:Epoch 9/50
+INFO:src.training.trainer:  Train - Loss: 2.1689, Acc: 0.1952, F1: 0.1806
+INFO:src.training.trainer:  Val   - Loss: 2.1914, Acc: 0.1667, F1: 0.1144
+INFO:src.training.trainer:Epoch 10/50
+INFO:src.training.trainer:  Train - Loss: 2.0541, Acc: 0.2365, F1: 0.2157
+INFO:src.training.trainer:  Val   - Loss: 1.9950, Acc: 0.2667, F1: 0.2206
+INFO:src.training.trainer:Epoch 11/50
+INFO:src.training.trainer:  Train - Loss: 2.0262, Acc: 0.2794, F1: 0.2608
+INFO:src.training.trainer:  Val   - Loss: 1.8559, Acc: 0.3333, F1: 0.3282
+INFO:src.training.trainer:Epoch 12/50
+INFO:src.training.trainer:  Train - Loss: 1.8999, Acc: 0.2762, F1: 0.2684
+INFO:src.training.trainer:  Val   - Loss: 1.7923, Acc: 0.3444, F1: 0.3053
+INFO:src.training.trainer:Epoch 13/50
+INFO:src.training.trainer:  Train - Loss: 1.7602, Acc: 0.3524, F1: 0.3450
+INFO:src.training.trainer:  Val   - Loss: 1.8604, Acc: 0.3556, F1: 0.3000
+INFO:src.training.trainer:Epoch 14/50
+INFO:src.training.trainer:  Train - Loss: 1.7415, Acc: 0.3508, F1: 0.3388
+INFO:src.training.trainer:  Val   - Loss: 1.6758, Acc: 0.4111, F1: 0.4019
+INFO:src.training.trainer:  Saved best model (Acc: 0.4111, F1: 0.4019)
+INFO:src.training.trainer:Epoch 15/50
+INFO:src.training.trainer:  Train - Loss: 1.7413, Acc: 0.3556, F1: 0.3478
+INFO:src.training.trainer:  Val   - Loss: 1.7605, Acc: 0.4556, F1: 0.4414
+INFO:src.training.trainer:  Saved best model (Acc: 0.4556, F1: 0.4414)
+INFO:src.training.trainer:Epoch 16/50
+INFO:src.training.trainer:  Train - Loss: 1.7784, Acc: 0.3873, F1: 0.3794
+INFO:src.training.trainer:  Val   - Loss: 2.2597, Acc: 0.3111, F1: 0.2589
+INFO:src.training.trainer:Epoch 17/50
+INFO:src.training.trainer:  Train - Loss: 1.7624, Acc: 0.3587, F1: 0.3457
+INFO:src.training.trainer:  Val   - Loss: 1.7888, Acc: 0.3556, F1: 0.2921
+INFO:src.training.trainer:Epoch 18/50
+INFO:src.training.trainer:  Train - Loss: 1.9067, Acc: 0.3302, F1: 0.3156
+INFO:src.training.trainer:  Val   - Loss: 1.7763, Acc: 0.3000, F1: 0.2366
+INFO:src.training.trainer:Epoch 19/50
+INFO:src.training.trainer:  Train - Loss: 2.0019, Acc: 0.2762, F1: 0.2658
+INFO:src.training.trainer:  Val   - Loss: 1.9901, Acc: 0.2667, F1: 0.2350
+INFO:src.training.trainer:Epoch 20/50
+INFO:src.training.trainer:  Train - Loss: 1.9625, Acc: 0.2952, F1: 0.2845
+INFO:src.training.trainer:  Val   - Loss: 2.2202, Acc: 0.1889, F1: 0.1324
+INFO:src.training.trainer:Epoch 21/50
+INFO:src.training.trainer:  Train - Loss: 1.8798, Acc: 0.3317, F1: 0.2960
+INFO:src.training.trainer:  Val   - Loss: 1.6038, Acc: 0.3889, F1: 0.3333
+INFO:src.training.trainer:Epoch 22/50
+INFO:src.training.trainer:  Train - Loss: 1.7400, Acc: 0.3476, F1: 0.3387
+INFO:src.training.trainer:  Val   - Loss: 1.6074, Acc: 0.4111, F1: 0.3461
+INFO:src.training.trainer:Epoch 23/50
+INFO:src.training.trainer:  Train - Loss: 1.7956, Acc: 0.3667, F1: 0.3391
+INFO:src.training.trainer:  Val   - Loss: 2.5026, Acc: 0.2667, F1: 0.2345
+INFO:src.training.trainer:Epoch 24/50
+INFO:src.training.trainer:  Train - Loss: 1.9331, Acc: 0.3048, F1: 0.2847
+INFO:src.training.trainer:  Val   - Loss: 1.7600, Acc: 0.2444, F1: 0.1848
+INFO:src.training.trainer:Epoch 25/50
+INFO:src.training.trainer:  Train - Loss: 1.8539, Acc: 0.3143, F1: 0.3051
+INFO:src.training.trainer:  Val   - Loss: 2.0109, Acc: 0.2778, F1: 0.2277
+INFO:src.training.trainer:Early stopping triggered after 25 epochs

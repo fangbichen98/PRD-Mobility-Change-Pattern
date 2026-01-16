@@ -1,0 +1,20 @@
+==================================================
+Evaluation Report: dual_branch_small
+==================================================
+
+Accuracy: 0.2556
+F1 Score (Macro): 0.1761
+F1 Score (Weighted): 0.1607
+Precision (Macro): 0.1984
+Recall (Macro): 0.2824
+
+Per-class F1 Scores:
+  Class 1: 0.3617
+  Class 2: 0.0833
+  Class 3: 0.0000
+  Class 4: 0.2000
+  Class 5: 0.4474
+  Class 6: 0.0000
+  Class 7: 0.0000
+  Class 8: 0.2222
+  Class 9: 0.2703
