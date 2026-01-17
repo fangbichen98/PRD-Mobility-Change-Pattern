@@ -325,23 +325,67 @@ class DualYearDataProcessor:
         }
 
 
-def prepare_dual_year_experiment_data(label_path, samples_per_class=None):
+def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_cache=True, cache_dir='data/cache'):
     """
-    Prepare complete dataset for dual-year experiment
+    Prepare complete dataset for dual-year experiment with caching support
 
     Args:
         label_path: Path to label file
         samples_per_class: Number of samples per class (None = use all samples)
+        use_cache: Whether to use cached data if available
+        cache_dir: Directory to store cached data
 
     Returns:
         Dictionary with all prepared data including class_weights
     """
+    import os
+    import pickle
+    import hashlib
     from src.preprocessing.data_processor import GridMetadataProcessor
     from src.preprocessing.graph_builder import SpatialGraphBuilder
+
+    # Create cache directory
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Generate cache key based on label_path and samples_per_class
+    label_basename = os.path.basename(label_path)
+    cache_key = f"{label_basename}_samples_{samples_per_class}"
+    cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
+    cache_file = os.path.join(cache_dir, f"dual_year_data_{cache_hash}.pkl")
+    cache_info_file = os.path.join(cache_dir, f"dual_year_data_{cache_hash}_info.txt")
+
+    # Try to load from cache
+    if use_cache and os.path.exists(cache_file):
+        logger.info("=" * 80)
+        logger.info("Loading Preprocessed Data from Cache")
+        logger.info("=" * 80)
+        logger.info(f"Cache file: {cache_file}")
+
+        try:
+            with open(cache_file, 'rb') as f:
+                data = pickle.load(f)
+
+            # Display cache info
+            if os.path.exists(cache_info_file):
+                with open(cache_info_file, 'r') as f:
+                    logger.info(f.read())
+
+            logger.info("✓ Successfully loaded cached data!")
+            logger.info(f"  - Total grids: {len(data['labels'])}")
+            logger.info(f"  - Graph edges: {data['edge_index'].shape[1]}")
+            logger.info("=" * 80)
+            return data
+
+        except Exception as e:
+            logger.warning(f"Failed to load cache: {e}")
+            logger.info("Proceeding with fresh data preparation...")
 
     logger.info("=" * 80)
     logger.info("Dual-Year Experiment Data Preparation")
     logger.info("=" * 80)
+    logger.info(f"Label file: {label_path}")
+    logger.info(f"Samples per class: {samples_per_class if samples_per_class else 'ALL'}")
+    logger.info("")
 
     # Load metadata
     logger.info("Loading grid metadata...")
@@ -412,7 +456,7 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None):
     logger.info(f"  - Graph edges: {edge_index.shape[1]}")
     logger.info(f"  - Feature dimension: {list(dual_year_data['change_features'].values())[0].shape}")
 
-    return {
+    data = {
         'metadata_df': metadata_sampled,
         'labels': labels,
         'change_features': dual_year_data['change_features'],
@@ -426,6 +470,38 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None):
         'label_df': label_df,
         'class_weights': class_weights
     }
+
+    # Save to cache
+    if use_cache:
+        logger.info(f"\nSaving preprocessed data to cache...")
+        logger.info(f"Cache file: {cache_file}")
+
+        try:
+            with open(cache_file, 'wb') as f:
+                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+            # Save cache info
+            with open(cache_info_file, 'w') as f:
+                f.write(f"Cache Information:\n")
+                f.write(f"  Label file: {label_path}\n")
+                f.write(f"  Samples per class: {samples_per_class if samples_per_class else 'ALL'}\n")
+                f.write(f"  Total grids: {len(labels)}\n")
+                f.write(f"  Graph edges: {edge_index.shape[1]}\n")
+                f.write(f"  Feature shape: {list(dual_year_data['change_features'].values())[0].shape}\n")
+                f.write(f"  Class distribution:\n")
+                for i in range(config.NUM_CLASSES):
+                    count = class_counts.get(i, 0)
+                    weight = class_weights[i].item()
+                    f.write(f"    Class {i+1}: {count} samples (weight: {weight:.4f})\n")
+
+            logger.info("✓ Cache saved successfully!")
+            logger.info(f"  Next run will load from cache in ~1 second")
+
+        except Exception as e:
+            logger.warning(f"Failed to save cache: {e}")
+            logger.info("Continuing without cache...")
+
+    return data
 
 
 if __name__ == "__main__":
