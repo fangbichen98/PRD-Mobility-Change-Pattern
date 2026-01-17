@@ -239,16 +239,19 @@ def run_dual_year_experiment(
     logger.info(f"Temporal branch: (batch, 168, 10) -> LSTM+SPP")
     logger.info(f"Spatial branch: (900, 168, 10) -> transpose -> (168, 900, 10) -> DySAT with temporal attention")
 
-    # Wrap model with DataParallel for multi-GPU
+    # Note: DataParallel doesn't work well with GNN models due to graph structure
+    # For GNN models, we keep single-GPU training or use DistributedDataParallel
+    # Commenting out DataParallel for now
     if device == 'cuda' and gpu_count > 1 and use_multi_gpu:
-        logger.info(f"\nWrapping model with DataParallel for {gpu_count} GPUs")
-        model = nn.DataParallel(model)
-        logger.info(f"Model will use GPUs: {list(range(gpu_count))}")
+        logger.info(f"\nNote: Multi-GPU training with DataParallel is not compatible with graph neural networks")
+        logger.info(f"Available GPUs: {gpu_count}, but using single GPU for GNN training")
+        logger.info(f"For multi-GPU GNN training, consider using PyTorch Geometric's DistributedDataParallel")
+        logger.info(f"Keeping batch size at: {batch_size}")
+        # model = nn.DataParallel(model)  # Disabled for GNN
 
-        # Adjust batch size for multi-GPU
-        original_batch_size = batch_size
-        batch_size = batch_size * gpu_count
-        logger.info(f"Adjusted batch size: {original_batch_size} -> {batch_size} ({original_batch_size} per GPU × {gpu_count} GPUs)")
+        # Don't adjust batch size since we're not using multi-GPU
+        # original_batch_size = batch_size
+        # batch_size = batch_size * gpu_count
 
     # Train
     logger.info("=" * 80)

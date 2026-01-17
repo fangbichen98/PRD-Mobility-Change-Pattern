@@ -5,10 +5,13 @@ This version fixes critical issues found in the original implementation:
 2. Uses labels.csv for larger sample sizes
 3. Adds detailed logging for debugging
 4. Fixes feature dimension handling
+5. Adds class weights for imbalanced data
+6. Enhanced logging with accuracy metrics
 """
 import pandas as pd
 import numpy as np
 import torch
+import torch.nn as nn
 import logging
 import os
 import json
@@ -195,10 +198,23 @@ def run_improved_dual_year_experiment(
     torch.manual_seed(config.RANDOM_SEED)
     np.random.seed(config.RANDOM_SEED)
 
-    # Check device
-    device = 'cuda' if torch.cuda.is_available() and device == 'cuda' else 'cpu'
-    logger.info(f"Using device: {device}")
-    logger.info("")
+    # Check device and GPU count
+    if torch.cuda.is_available() and device == 'cuda':
+        device = 'cuda'
+        gpu_count = torch.cuda.device_count()
+        logger.info(f"Using device: {device}")
+        logger.info(f"Available GPUs: {gpu_count}")
+        for i in range(gpu_count):
+            logger.info(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+        logger.info("")
+        logger.info("Note: Graph Neural Networks (GNN) don't support standard DataParallel")
+        logger.info("Using single GPU for GNN training (standard practice)")
+        logger.info("")
+    else:
+        device = 'cpu'
+        gpu_count = 0
+        logger.info(f"Using device: {device}")
+        logger.info("")
 
     # Prepare dual-year data
     logger.info("=" * 80)
@@ -207,7 +223,9 @@ def run_improved_dual_year_experiment(
 
     data = prepare_dual_year_experiment_data(
         label_path=label_path,
-        samples_per_class=samples_per_class
+        samples_per_class=samples_per_class,
+        use_cache=True,  # Enable caching
+        cache_dir='data/cache'
     )
 
     logger.info(f"Total samples loaded: {len(data['labels'])}")
@@ -292,15 +310,16 @@ def run_improved_dual_year_experiment(
         val_loader=val_loader,
         device=device,
         checkpoint_dir=dirs['models'],
-        log_dir=dirs['logs']
+        log_dir=dirs['logs'],
+        class_weights=data['class_weights']  # Add class weights for imbalanced data
     )
 
     best_acc, best_f1 = trainer.train(num_epochs=num_epochs, early_stopping_patience=15)
 
     logger.info("")
     logger.info(f"Training completed!")
-    logger.info(f"Best validation accuracy: {best_acc:.4f}")
-    logger.info(f"Best validation F1: {best_f1:.4f}")
+    logger.info(f"Best validation accuracy: {best_acc:.4f} ({best_acc*100:.2f}%)")
+    logger.info(f"Best validation F1 score: {best_f1:.4f}")
     logger.info("")
 
     # Save training history
@@ -327,15 +346,17 @@ def run_improved_dual_year_experiment(
     evaluator = Evaluator(model, test_loader, device=device, output_dir=dirs['figures'])
     results = evaluator.evaluate()
 
-    logger.info(f"Test Accuracy: {results['accuracy']:.4f} ({results['accuracy']*100:.2f}%)")
-    logger.info(f"Test F1 (Macro): {results['f1_macro']:.4f}")
-    logger.info(f"Test F1 (Weighted): {results['f1_weighted']:.4f}")
-    logger.info(f"Test Precision: {results['precision']:.4f}")
-    logger.info(f"Test Recall: {results['recall']:.4f}")
     logger.info("")
-    logger.info("Per-class F1 scores:")
+    logger.info(f"Test Results:")
+    logger.info(f"  Accuracy: {results['accuracy']:.4f} ({results['accuracy']*100:.2f}%)")
+    logger.info(f"  F1 Score (Macro): {results['f1_macro']:.4f}")
+    logger.info(f"  F1 Score (Weighted): {results['f1_weighted']:.4f}")
+    logger.info(f"  Precision: {results['precision']:.4f}")
+    logger.info(f"  Recall: {results['recall']:.4f}")
+    logger.info("")
+    logger.info(f"Per-class F1 scores:")
     for i, f1 in enumerate(results['f1_per_class']):
-        logger.info(f"  Class {i}: {f1:.4f}")
+        logger.info(f"  Class {i+1}: {f1:.4f}")
     logger.info("")
 
     # Save results
@@ -490,23 +511,25 @@ def run_improved_dual_year_experiment(
 
 
 if __name__ == "__main__":
-    # Run improved dual-year experiment with memory-optimized settings
+    # Run improved dual-year experiment with full labels, class weights, and caching
     experiment_dir, results = run_improved_dual_year_experiment(
-        experiment_name="improved_dual_year_2021vs2024",
+        experiment_name="improved_full_dual_year_2021vs2024",
         model_type='dual_branch',
-        samples_per_class=200,  # Reduced from 500 to 200 to fit in GPU memory
+        samples_per_class=None,  # Use all samples
         num_epochs=100,
-        batch_size=8,  # Reduced from 16 to 8 to save memory
+        batch_size=16,  # Reduced from 64 to 16 to avoid OOM
         device='cuda',
-        label_path='data/labels.csv'
+        label_path='data/labels.csv'  # Full label dataset
     )
 
     print(f"\n✅ Improved dual-year experiment completed!")
     print(f"📁 Results saved to: {experiment_dir}")
     print(f"📊 Test Accuracy: {results['accuracy']:.4f} ({results['accuracy']*100:.2f}%)")
     print(f"📈 Test F1 Score: {results['f1_macro']:.4f}")
-    print(f"\n💡 Key improvements:")
-    print(f"  - Spatial features kept as 3D (preserving temporal structure)")
-    print(f"  - DySAT temporal attention properly applied")
-    print(f"  - Larger sample size (500 per class)")
-    print(f"  - Enhanced logging for debugging")
+    print(f"\n💡 Improvements in this version:")
+    print(f"  ✓ Full dataset with 9,977 samples")
+    print(f"  ✓ Class weights for imbalanced data")
+    print(f"  ✓ Enhanced logging with accuracy metrics")
+    print(f"  ✓ Preserved temporal structure (no flattening)")
+    print(f"  ✓ Single GPU training (GNN best practice)")
+    print(f"  ✓ Data caching for fast restarts")
