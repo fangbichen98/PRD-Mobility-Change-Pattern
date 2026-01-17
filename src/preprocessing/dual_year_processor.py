@@ -4,6 +4,7 @@ Processes both 2021 and 2024 data to capture temporal changes
 """
 import pandas as pd
 import numpy as np
+import torch
 import logging
 from tqdm import tqdm
 import config
@@ -324,16 +325,16 @@ class DualYearDataProcessor:
         }
 
 
-def prepare_dual_year_experiment_data(label_path, samples_per_class=100):
+def prepare_dual_year_experiment_data(label_path, samples_per_class=None):
     """
     Prepare complete dataset for dual-year experiment
 
     Args:
         label_path: Path to label file
-        samples_per_class: Number of samples per class
+        samples_per_class: Number of samples per class (None = use all samples)
 
     Returns:
-        Dictionary with all prepared data
+        Dictionary with all prepared data including class_weights
     """
     from src.preprocessing.data_processor import GridMetadataProcessor
     from src.preprocessing.graph_builder import SpatialGraphBuilder
@@ -348,31 +349,49 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=100):
     metadata_df = metadata_processor.load_and_validate()
     valid_grid_ids = metadata_processor.get_valid_grid_ids(metadata_df)
 
-    # Load and sample labels
+    # Load labels
     logger.info(f"Loading labels from {label_path}...")
     label_df = pd.read_csv(label_path)
     label_df = label_df[label_df['grid_id'].isin(valid_grid_ids)]
     label_df = label_df[label_df['label'].between(1, 9)]
 
-    # Sample balanced labels
-    sampled_dfs = []
-    for label in range(1, config.NUM_CLASSES + 1):
-        class_df = label_df[label_df['label'] == label]
-        if len(class_df) >= samples_per_class:
-            sampled = class_df.sample(n=samples_per_class, random_state=config.RANDOM_SEED)
-        else:
-            logger.warning(f"Class {label} has only {len(class_df)} samples, using all")
-            sampled = class_df
+    # Sample or use all labels
+    if samples_per_class is not None:
+        logger.info(f"Sampling {samples_per_class} samples per class...")
+        sampled_dfs = []
+        for label in range(1, config.NUM_CLASSES + 1):
+            class_df = label_df[label_df['label'] == label]
+            if len(class_df) >= samples_per_class:
+                sampled = class_df.sample(n=samples_per_class, random_state=config.RANDOM_SEED)
+            else:
+                logger.warning(f"Class {label} has only {len(class_df)} samples, using all")
+                sampled = class_df
 
-        sampled_dfs.append(sampled)
+            sampled_dfs.append(sampled)
 
-    label_df = pd.concat(sampled_dfs, ignore_index=True)
+        label_df = pd.concat(sampled_dfs, ignore_index=True)
+    else:
+        logger.info("Using all available labels (no sampling)")
+
     label_df['label_idx'] = label_df['label'] - 1
 
     labels = dict(zip(label_df['grid_id'], label_df['label_idx']))
     sampled_grid_ids = set(labels.keys())
 
-    logger.info(f"Sampled {len(labels)} grids across {config.NUM_CLASSES} classes")
+    # Compute class weights for imbalanced data
+    class_counts = label_df['label_idx'].value_counts().sort_index()
+    total_samples = len(label_df)
+    class_weights = torch.FloatTensor([
+        total_samples / (config.NUM_CLASSES * class_counts[i])
+        for i in range(config.NUM_CLASSES)
+    ])
+
+    logger.info(f"Total samples: {len(labels)} grids across {config.NUM_CLASSES} classes")
+    logger.info("Class distribution:")
+    for i in range(config.NUM_CLASSES):
+        count = class_counts.get(i, 0)
+        weight = class_weights[i].item()
+        logger.info(f"  Class {i+1}: {count} samples (weight: {weight:.4f})")
 
     # Prepare dual-year data
     dual_year_processor = DualYearDataProcessor(year1=2021, year2=2024)
@@ -404,7 +423,8 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=100):
         'grid_id_to_idx': grid_id_to_idx,
         'norm_params_2021': dual_year_data['norm_params_2021'],
         'norm_params_2024': dual_year_data['norm_params_2024'],
-        'label_df': label_df
+        'label_df': label_df,
+        'class_weights': class_weights
     }
 
 

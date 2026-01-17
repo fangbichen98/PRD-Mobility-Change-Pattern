@@ -33,7 +33,8 @@ class Trainer:
                  learning_rate=config.LEARNING_RATE,
                  weight_decay=config.WEIGHT_DECAY,
                  log_dir=config.LOG_DIR,
-                 checkpoint_dir=config.CHECKPOINT_DIR):
+                 checkpoint_dir=config.CHECKPOINT_DIR,
+                 class_weights=None):
         """
         Initialize trainer
 
@@ -46,14 +47,23 @@ class Trainer:
             weight_decay: Weight decay
             log_dir: Directory for tensorboard logs
             checkpoint_dir: Directory for model checkpoints
+            class_weights: Class weights for imbalanced data (FloatTensor)
         """
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
 
-        # Loss and optimizer
-        self.criterion = nn.CrossEntropyLoss()
+        # Check if model is wrapped with DataParallel
+        self.is_data_parallel = isinstance(model, nn.DataParallel)
+        if self.is_data_parallel:
+            logger.info("Model is wrapped with DataParallel")
+
+        # Loss and optimizer with class weights
+        if class_weights is not None:
+            class_weights = class_weights.to(device)
+            logger.info(f"Using class weights for imbalanced data: {class_weights.cpu().numpy()}")
+        self.criterion = nn.CrossEntropyLoss(weight=class_weights)
         self.optimizer = optim.Adam(
             model.parameters(),
             lr=learning_rate,
@@ -255,10 +265,12 @@ class Trainer:
                 self.best_val_f1 = val_f1
                 self.epochs_without_improvement = 0
 
+                # Save model state (handle DataParallel wrapper)
+                model_state = self.model.module.state_dict() if self.is_data_parallel else self.model.state_dict()
                 checkpoint_path = os.path.join(self.checkpoint_dir, 'best_model.pth')
                 torch.save({
                     'epoch': epoch,
-                    'model_state_dict': self.model.state_dict(),
+                    'model_state_dict': model_state,
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'val_acc': val_acc,
                     'val_f1': val_f1,
@@ -281,10 +293,12 @@ class Trainer:
 
             # Save periodic checkpoint
             if epoch % 10 == 0:
+                # Save model state (handle DataParallel wrapper)
+                model_state = self.model.module.state_dict() if self.is_data_parallel else self.model.state_dict()
                 checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_epoch_{epoch}.pth')
                 torch.save({
                     'epoch': epoch,
-                    'model_state_dict': self.model.state_dict(),
+                    'model_state_dict': model_state,
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'val_acc': val_acc,
                     'val_f1': val_f1
@@ -352,7 +366,8 @@ def create_data_loaders(dataset, edge_index, edge_attr, grid_id_to_idx,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collator,
-        num_workers=0  # Set to 0 for Windows compatibility
+        num_workers=4,  # Use multiple workers for faster data loading
+        pin_memory=True  # Speed up GPU data transfer
     )
 
     val_loader = DataLoader(
@@ -360,7 +375,8 @@ def create_data_loaders(dataset, edge_index, edge_attr, grid_id_to_idx,
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collator,
-        num_workers=0
+        num_workers=4,
+        pin_memory=True
     )
 
     test_loader = DataLoader(
@@ -368,7 +384,8 @@ def create_data_loaders(dataset, edge_index, edge_attr, grid_id_to_idx,
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collator,
-        num_workers=0
+        num_workers=4,
+        pin_memory=True
     )
 
     return train_loader, val_loader, test_loader

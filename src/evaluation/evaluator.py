@@ -2,6 +2,7 @@
 Evaluation utilities for model assessment
 """
 import torch
+import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -33,6 +34,9 @@ class Evaluator:
         self.test_loader = test_loader
         self.device = device
         self.output_dir = output_dir
+
+        # Check if model is wrapped with DataParallel
+        self.is_data_parallel = isinstance(model, nn.DataParallel)
 
         os.makedirs(output_dir, exist_ok=True)
 

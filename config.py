@@ -39,8 +39,8 @@ SPP_LEVELS = [1, 2, 4]  # Spatial Pyramid Pooling levels (1x1, 2x2, 4x4)
 
 # Dynamic graph branch (DySAT)
 DYSAT_LAYERS = 3
-DYSAT_HIDDEN_SIZE = 128
-DYSAT_HEADS = 4  # Number of attention heads
+DYSAT_HIDDEN_SIZE = 64
+DYSAT_HEADS = 2  # Number of attention heads
 DYSAT_DROPOUT = 0.2
 TIME_WINDOW = 24  # 24-hour sliding window
 
@@ -49,7 +49,7 @@ FUSION_HIDDEN_SIZE = 256
 ATTENTION_HEADS = 4
 
 # Training parameters
-BATCH_SIZE = 32
+BATCH_SIZE = 8
 LEARNING_RATE = 0.001
 NUM_EPOCHS = 100
 EARLY_STOPPING_PATIENCE = 15
