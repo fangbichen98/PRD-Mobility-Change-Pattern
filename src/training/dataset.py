@@ -3,6 +3,7 @@ Dataset class for mobility pattern classification
 """
 import torch
 from torch.utils.data import Dataset
+from torch_geometric.utils import k_hop_subgraph
 import numpy as np
 from typing import Dict, List, Tuple
 import logging
@@ -87,13 +88,13 @@ class GraphBatchCollator:
 
     def __call__(self, batch):
         """
-        Collate batch
+        Collate batch with k-hop subgraph extraction
 
         Args:
             batch: List of samples from dataset
 
         Returns:
-            Batched data dictionary
+            Batched data dictionary with subgraph information
         """
         temporal_batch = torch.stack([item['temporal'] for item in batch])
         spatial_batch = torch.stack([item['spatial'] for item in batch])
@@ -106,13 +107,81 @@ class GraphBatchCollator:
         else:
             node_indices = None
 
-        return {
-            'temporal': temporal_batch,  # (batch_size, time_steps, features)
-            'spatial': spatial_batch,    # (batch_size, time_steps, features) - NOT flattened
-            'labels': label_batch,
-            'grid_ids': grid_ids,
-            'node_indices': node_indices,
-            'edge_index': self.edge_index,
-            'edge_attr': self.edge_attr,
-            'all_spatial_features': self.all_spatial_features  # (num_nodes, time_steps, features)
-        }
+        # Extract k-hop subgraph for batch nodes (MEMORY OPTIMIZATION)
+        if node_indices is not None and self.all_spatial_features is not None:
+            # Extract 1-hop subgraph to preserve local graph structure while minimizing memory
+            # Using 1-hop instead of 2-hop for better memory efficiency
+            subset, edge_index_sub, mapping, edge_mask = k_hop_subgraph(
+                node_idx=node_indices,
+                num_hops=1,  # Reduced from 2 to 1 for better memory efficiency
+                edge_index=self.edge_index,
+                relabel_nodes=True,
+                num_nodes=self.all_spatial_features.size(0)
+            )
+
+            # CRITICAL: If subgraph is too large, use only batch nodes (no neighbors)
+            # This prevents OOM on densely connected regions
+            MAX_SUBGRAPH_NODES = 500  # Limit to 500 nodes max
+            if len(subset) > MAX_SUBGRAPH_NODES:
+                # Use only batch nodes, no neighbors
+                subset = node_indices
+                # Create edges only between batch nodes
+                batch_set = set(node_indices.tolist())
+                mask = torch.tensor([
+                    (self.edge_index[0, i].item() in batch_set and
+                     self.edge_index[1, i].item() in batch_set)
+                    for i in range(self.edge_index.size(1))
+                ])
+                edge_index_sub = self.edge_index[:, mask]
+                # Relabel nodes to 0, 1, 2, ...
+                old_to_new = {old_idx.item(): new_idx for new_idx, old_idx in enumerate(node_indices)}
+                edge_index_sub = torch.tensor([
+                    [old_to_new[edge_index_sub[0, i].item()], old_to_new[edge_index_sub[1, i].item()]]
+                    for i in range(edge_index_sub.size(1))
+                ]).t()
+                edge_mask = mask
+                mapping = torch.arange(len(node_indices))
+                logger.warning(f"Subgraph too large ({len(subset)} nodes), using batch nodes only")
+                subset = node_indices
+
+            # Extract spatial features for subgraph nodes only
+            # This reduces memory from (num_nodes, time_steps, features) to (num_subgraph_nodes, time_steps, features)
+            spatial_features_sub = self.all_spatial_features[subset]
+
+            # Get edge attributes for subgraph
+            if self.edge_attr is not None:
+                edge_attr_sub = self.edge_attr[edge_mask]
+            else:
+                edge_attr_sub = None
+
+            # Batch node indices in subgraph (first len(batch) nodes after relabeling)
+            batch_indices_in_subgraph = mapping[:len(node_indices)]
+
+            # Log subgraph size for monitoring (always log for first few batches)
+            num_edges = edge_index_sub.size(1) if edge_index_sub.numel() > 0 else 0
+            logger.info(f"Subgraph extraction: {len(subset)} nodes (from {self.all_spatial_features.size(0)}), "
+                       f"{num_edges} edges (from {self.edge_index.size(1)}), "
+                       f"batch_size={len(node_indices)}")
+
+            return {
+                'temporal': temporal_batch,  # (batch_size, time_steps, features)
+                'spatial': spatial_batch,    # (batch_size, time_steps, features) - NOT flattened
+                'labels': label_batch,
+                'grid_ids': grid_ids,
+                'node_indices': batch_indices_in_subgraph,  # Indices within subgraph
+                'edge_index': edge_index_sub,  # Subgraph edges
+                'edge_attr': edge_attr_sub,    # Subgraph edge attributes
+                'all_spatial_features': spatial_features_sub  # Subgraph features only (MEMORY OPTIMIZED)
+            }
+        else:
+            # Fallback to original behavior (no subgraph extraction)
+            return {
+                'temporal': temporal_batch,  # (batch_size, time_steps, features)
+                'spatial': spatial_batch,    # (batch_size, time_steps, features) - NOT flattened
+                'labels': label_batch,
+                'grid_ids': grid_ids,
+                'node_indices': node_indices,
+                'edge_index': self.edge_index,
+                'edge_attr': self.edge_attr,
+                'all_spatial_features': self.all_spatial_features  # (num_nodes, time_steps, features)
+            }

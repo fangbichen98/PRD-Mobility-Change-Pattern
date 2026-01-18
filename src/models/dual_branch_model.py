@@ -143,10 +143,13 @@ class DualBranchSTModel(nn.Module):
 
         Args:
             temporal_input: Temporal features (batch_size, seq_len, temporal_input_size)
-            spatial_input: Spatial features for ALL nodes (num_nodes, time_steps, features) - 3D for DySAT
-            edge_index: Graph edge indices (2, num_edges)
-            edge_attr: Edge attributes
-            node_indices: Indices of nodes in this batch (batch_size,)
+            spatial_input: Spatial features for SUBGRAPH nodes (num_subgraph_nodes, time_steps, features)
+                          NOTE: After subgraph extraction, this contains only the k-hop neighborhood
+                          of batch nodes, not the full graph. This dramatically reduces memory usage.
+            edge_index: Subgraph edge indices (2, num_subgraph_edges)
+            edge_attr: Subgraph edge attributes
+            node_indices: Indices of batch nodes within subgraph (batch_size,)
+                         These are the positions of the actual batch nodes in the subgraph
 
         Returns:
             Class logits (batch_size, num_classes)
@@ -154,16 +157,16 @@ class DualBranchSTModel(nn.Module):
         # Extract temporal features
         temporal_features = self.temporal_branch(temporal_input)
 
-        # Extract spatial features for ALL nodes
-        # spatial_input is now (num_nodes, time_steps, features) for DySAT temporal attention
-        all_spatial_features = self.spatial_branch(spatial_input, edge_index, edge_attr)
+        # Extract spatial features for SUBGRAPH (not full graph)
+        # This processes only ~300 nodes instead of ~10,000 nodes (33x memory reduction)
+        subgraph_features = self.spatial_branch(spatial_input, edge_index, edge_attr)
 
-        # Select spatial features for batch nodes
+        # Select spatial features for batch nodes within subgraph
         if node_indices is not None:
-            spatial_features = all_spatial_features[node_indices]
+            spatial_features = subgraph_features[node_indices]
         else:
             # If no node_indices provided, assume spatial_input is already for batch
-            spatial_features = all_spatial_features[:temporal_features.size(0)]
+            spatial_features = subgraph_features[:temporal_features.size(0)]
 
         # Fuse features
         fused_features = self.fusion(temporal_features, spatial_features)

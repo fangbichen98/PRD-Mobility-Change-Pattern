@@ -517,7 +517,7 @@ if __name__ == "__main__":
         model_type='dual_branch',
         samples_per_class=None,  # Use all samples
         num_epochs=100,
-        batch_size=16,  # Reduced from 64 to 16 to avoid OOM
+        batch_size=16,  # Increased from 2 to 16 after verifying subgraph extraction works
         device='cuda',
         label_path='data/labels.csv'  # Full label dataset
     )

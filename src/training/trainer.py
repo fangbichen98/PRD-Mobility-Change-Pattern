@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 import numpy as np
 import os
 from tqdm import tqdm
@@ -78,6 +79,10 @@ class Trainer:
             patience=10
         )
 
+        # Mixed precision training scaler
+        self.scaler = GradScaler()
+        logger.info("Mixed precision training enabled with GradScaler")
+
         # Logging
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -103,7 +108,7 @@ class Trainer:
         logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
 
     def train_epoch(self, epoch):
-        """Train for one epoch"""
+        """Train for one epoch with mixed precision"""
         self.model.train()
         total_loss = 0.0
         all_preds = []
@@ -111,7 +116,7 @@ class Trainer:
 
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch} [Train]")
 
-        for batch in pbar:
+        for batch_idx, batch in enumerate(pbar):
             # Move data to device
             temporal = batch['temporal'].to(self.device)
             spatial = batch['spatial'].to(self.device)
@@ -121,29 +126,36 @@ class Trainer:
             node_indices = batch['node_indices'].to(self.device) if batch['node_indices'] is not None else None
             all_spatial_features = batch['all_spatial_features'].to(self.device) if batch['all_spatial_features'] is not None else spatial
 
-            # Forward pass
+            # Forward pass with mixed precision
             self.optimizer.zero_grad()
 
-            if isinstance(self.model, (BaselineLSTM,)):
-                logits = self.model(temporal)
-            elif isinstance(self.model, (BaselineGAT,)):
-                # For GAT, use all spatial features
-                all_logits = self.model(all_spatial_features, edge_index, edge_attr)
-                # Select batch nodes
-                if node_indices is not None:
-                    logits = all_logits[node_indices]
+            with autocast():
+                if isinstance(self.model, (BaselineLSTM,)):
+                    logits = self.model(temporal)
+                elif isinstance(self.model, (BaselineGAT,)):
+                    # For GAT, use all spatial features
+                    all_logits = self.model(all_spatial_features, edge_index, edge_attr)
+                    # Select batch nodes
+                    if node_indices is not None:
+                        logits = all_logits[node_indices]
+                    else:
+                        logits = all_logits[:len(labels)]
                 else:
-                    logits = all_logits[:len(labels)]
-            else:
-                # Dual-branch model
-                logits = self.model(temporal, all_spatial_features, edge_index, edge_attr, node_indices)
+                    # Dual-branch model
+                    logits = self.model(temporal, all_spatial_features, edge_index, edge_attr, node_indices)
 
-            loss = self.criterion(logits, labels)
+                loss = self.criterion(logits, labels)
 
-            # Backward pass
-            loss.backward()
+            # Backward pass with gradient scaling
+            self.scaler.scale(loss).backward()
+
+            # Gradient clipping with scaler
+            self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.optimizer.step()
+
+            # Optimizer step with scaler
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
             # Track metrics
             total_loss += loss.item()
@@ -153,6 +165,18 @@ class Trainer:
 
             # Update progress bar
             pbar.set_postfix({'loss': loss.item()})
+
+            # Memory profiling for first batch
+            if batch_idx == 0:
+                peak_memory = torch.cuda.max_memory_allocated() / 1024**3
+                logger.info(f"Peak GPU memory (first batch): {peak_memory:.3f} GB")
+
+                # Log subgraph size if available
+                if all_spatial_features is not None:
+                    num_subgraph_nodes = all_spatial_features.size(0)
+                    logger.info(f"Subgraph size: {num_subgraph_nodes} nodes (batch size: {len(labels)})")
+
+                torch.cuda.reset_peak_memory_stats()
 
         # Calculate epoch metrics
         avg_loss = total_loss / len(self.train_loader)
