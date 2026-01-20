@@ -185,3 +185,129 @@ class GraphBatchCollator:
                 'edge_attr': self.edge_attr,
                 'all_spatial_features': self.all_spatial_features  # (num_nodes, time_steps, features)
             }
+
+
+class ImprovedDualYearDataset(Dataset):
+    """Dataset for improved dual-year mobility pattern classification"""
+
+    def __init__(self,
+                 change_features: Dict[int, np.ndarray],
+                 labels: Dict[int, int],
+                 grid_ids: List[int],
+                 metadata_df=None):
+        """
+        Initialize improved dual-year dataset
+
+        Args:
+            change_features: Dictionary mapping grid_id to change features (7, 4)
+                            [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]
+            labels: Dictionary mapping grid_id to label (0-8)
+            grid_ids: List of grid IDs to include in dataset
+            metadata_df: Grid metadata DataFrame (optional)
+        """
+        self.change_features = change_features
+        self.labels = labels
+        self.grid_ids = [gid for gid in grid_ids if gid in labels]
+        self.metadata_df = metadata_df
+
+        logger.info(f"Created improved dual-year dataset with {len(self.grid_ids)} samples")
+
+    def __len__(self):
+        return len(self.grid_ids)
+
+    def __getitem__(self, idx):
+        """
+        Get item by index
+
+        Returns:
+            x_2021: Features for 2021 (7, 2) - [total_log, net_flow_log]
+            x_2024: Features for 2024 (7, 2) - [total_log, net_flow_log]
+            label: Class label (0-8)
+            grid_id: Grid ID
+        """
+        grid_id = self.grid_ids[idx]
+
+        # Get change features (7, 4)
+        features = self.change_features[grid_id]
+
+        # Split into 2021 and 2024 features
+        x_2021 = features[:, [0, 2]]  # (7, 2) - [total_log, net_flow_log]
+        x_2024 = features[:, [1, 3]]  # (7, 2) - [total_log, net_flow_log]
+
+        # Get label
+        label = self.labels[grid_id]
+
+        return {
+            'x_2021': torch.FloatTensor(x_2021),
+            'x_2024': torch.FloatTensor(x_2024),
+            'label': torch.LongTensor([label])[0],
+            'grid_id': grid_id
+        }
+
+
+class ImprovedGraphBatchCollator:
+    """Custom collator for batching improved dual-year graph data"""
+
+    def __init__(self,
+                 graphs_2021: List[Tuple[np.ndarray, np.ndarray]],
+                 graphs_2024: List[Tuple[np.ndarray, np.ndarray]],
+                 grid_id_to_idx: Dict[int, int],
+                 all_features_2021: np.ndarray,
+                 all_features_2024: np.ndarray):
+        """
+        Initialize improved collator
+
+        Args:
+            graphs_2021: List of 7 (edge_index, edge_attr) tuples for 2021
+            graphs_2024: List of 7 (edge_index, edge_attr) tuples for 2024
+            grid_id_to_idx: Mapping from grid_id to node index
+            all_features_2021: All features for 2021 (num_nodes, 7, 2)
+            all_features_2024: All features for 2024 (num_nodes, 7, 2)
+        """
+        # Convert graphs to tensors
+        self.graphs_2021 = [
+            (torch.LongTensor(edge_index), torch.FloatTensor(edge_attr))
+            for edge_index, edge_attr in graphs_2021
+        ]
+        self.graphs_2024 = [
+            (torch.LongTensor(edge_index), torch.FloatTensor(edge_attr))
+            for edge_index, edge_attr in graphs_2024
+        ]
+
+        self.grid_id_to_idx = grid_id_to_idx
+        self.all_features_2021 = torch.FloatTensor(all_features_2021)
+        self.all_features_2024 = torch.FloatTensor(all_features_2024)
+
+    def __call__(self, batch):
+        """
+        Collate batch with dynamic graphs
+
+        Args:
+            batch: List of samples from dataset
+
+        Returns:
+            Batched data dictionary with dynamic graph information
+        """
+        x_2021_batch = torch.stack([item['x_2021'] for item in batch])
+        x_2024_batch = torch.stack([item['x_2024'] for item in batch])
+        label_batch = torch.stack([item['label'] for item in batch])
+        grid_ids = [item['grid_id'] for item in batch]
+
+        # Get node indices for this batch
+        node_indices = torch.LongTensor([self.grid_id_to_idx[gid] for gid in grid_ids])
+
+        # For improved model, we pass full graph features and let model handle extraction
+        # This is simpler and allows spatial branch to see full graph context
+        # NOTE: Graphs stay on CPU here, will be moved to device in train loop
+
+        return {
+            'x_2021': x_2021_batch,  # (batch_size, 7, 2)
+            'x_2024': x_2024_batch,  # (batch_size, 7, 2)
+            'labels': label_batch,
+            'grid_ids': grid_ids,
+            'node_indices': node_indices,
+            'graphs_2021': self.graphs_2021,  # List of 7 graphs (on CPU)
+            'graphs_2024': self.graphs_2024,  # List of 7 graphs (on CPU)
+            'all_features_2021': self.all_features_2021,  # (num_nodes, 7, 2)
+            'all_features_2024': self.all_features_2024   # (num_nodes, 7, 2)
+        }

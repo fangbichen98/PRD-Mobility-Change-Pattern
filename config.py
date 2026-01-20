@@ -18,9 +18,17 @@ FIGURE_DIR = os.path.join(OUTPUT_DIR, "figures")
 CHECKPOINT_DIR = "checkpoints"
 
 # Data preprocessing parameters
-TRAIN_DAYS = 7  # Use first 7 days (168 hours) for training
+TRAIN_DAYS = 7  # Use first 7 days for training
 HOURS_PER_DAY = 24
-TRAIN_HOURS = TRAIN_DAYS * HOURS_PER_DAY
+TRAIN_HOURS = TRAIN_DAYS * HOURS_PER_DAY  # 168 hours (for old model)
+TIME_STEPS = 7  # NEW: 7 daily snapshots (for improved model)
+AGGREGATION_METHOD = 'sum'  # Time aggregation method
+
+# Feature parameters
+TEMPORAL_INPUT_SIZE = 2  # [total_log, net_flow_log]
+SPATIAL_INPUT_SIZE = 2   # [total_log, net_flow_log]
+NORMALIZATION = 'log'  # 'log', 'none', 'zscore'
+USE_LOG_TRANSFORM = True
 
 # Coordinate validation ranges
 LON_RANGE = (-180, 180)
@@ -42,7 +50,7 @@ DYSAT_LAYERS = 3
 DYSAT_HIDDEN_SIZE = 64
 DYSAT_HEADS = 2  # Number of attention heads
 DYSAT_DROPOUT = 0.2
-TIME_WINDOW = 24  # 24-hour sliding window
+TIME_WINDOW = 24  # 24-hour sliding window (for old model)
 
 # Fusion layer
 FUSION_HIDDEN_SIZE = 256
@@ -50,7 +58,7 @@ ATTENTION_HEADS = 4
 
 # Training parameters
 BATCH_SIZE = 2  # Temporarily reduced for subgraph extraction testing
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.01
 NUM_EPOCHS = 100
 EARLY_STOPPING_PATIENCE = 15
 WEIGHT_DECAY = 1e-5

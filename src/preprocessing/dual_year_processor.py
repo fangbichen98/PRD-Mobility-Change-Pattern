@@ -135,6 +135,7 @@ class DualYearDataProcessor:
     def aggregate_grid_flows(self, od_df, grid_ids, use_raw=False):
         """
         Aggregate inflow and outflow for each grid over time
+        NEW: Aggregates to daily snapshots (7 days) instead of hourly (168 hours)
 
         Args:
             od_df: OD flow DataFrame
@@ -142,12 +143,12 @@ class DualYearDataProcessor:
             use_raw: If True, use raw num_total instead of normalized values
 
         Returns:
-            Dictionary mapping grid_id to temporal flow array (time_steps, 2)
+            Dictionary mapping grid_id to temporal flow array (7, 2) - 7 days, [inflow, outflow]
         """
-        logger.info("Aggregating grid flows")
+        logger.info("Aggregating grid flows to daily snapshots")
 
-        # Create time index (assuming 7 days * 24 hours = 168 time steps)
-        time_steps = config.TRAIN_DAYS * 24
+        # Number of days
+        num_days = config.TRAIN_DAYS  # 7 days
 
         grid_flows = {}
 
@@ -155,109 +156,114 @@ class DualYearDataProcessor:
         flow_column = 'num_total' if use_raw else 'num_total_normalized'
 
         for grid_id in tqdm(grid_ids, desc="Processing grids"):
-            # Initialize flow array
-            flow_array = np.zeros((time_steps, 2))  # (time, [inflow, outflow])
+            # Initialize flow array for daily aggregation
+            daily_flow_array = np.zeros((num_days, 2))  # (7, [inflow, outflow])
 
-            # Get inflow (this grid as destination)
-            inflow = od_df[od_df['d_grid_500'] == grid_id].groupby('time')[flow_column].sum()
+            # Get all inflow records (this grid as destination)
+            inflow_df = od_df[od_df['d_grid_500'] == grid_id].copy()
 
-            # Get outflow (this grid as origin)
-            outflow = od_df[od_df['o_grid_500'] == grid_id].groupby('time')[flow_column].sum()
+            # Get all outflow records (this grid as origin)
+            outflow_df = od_df[od_df['o_grid_500'] == grid_id].copy()
 
-            # Fill flow array
-            for t in range(time_steps):
-                if t in inflow.index:
-                    flow_array[t, 0] = inflow[t]
-                if t in outflow.index:
-                    flow_array[t, 1] = outflow[t]
+            # Aggregate by day
+            if len(inflow_df) > 0:
+                # Group by date and sum across all hours
+                inflow_df['day_idx'] = (inflow_df['date_dt'] - inflow_df['date_dt'].min()).dt.days
+                daily_inflow = inflow_df.groupby('day_idx')[flow_column].sum()
 
-            grid_flows[grid_id] = flow_array
+                for day_idx, flow_val in daily_inflow.items():
+                    if 0 <= day_idx < num_days:
+                        daily_flow_array[day_idx, 0] = flow_val
 
+            if len(outflow_df) > 0:
+                # Group by date and sum across all hours
+                outflow_df['day_idx'] = (outflow_df['date_dt'] - outflow_df['date_dt'].min()).dt.days
+                daily_outflow = outflow_df.groupby('day_idx')[flow_column].sum()
+
+                for day_idx, flow_val in daily_outflow.items():
+                    if 0 <= day_idx < num_days:
+                        daily_flow_array[day_idx, 1] = flow_val
+
+            grid_flows[grid_id] = daily_flow_array
+
+        logger.info(f"Aggregated flows to {num_days} daily snapshots per grid")
         return grid_flows
+
+    def log_transform_features(self, total, net_flow):
+        """
+        Apply log transformation to preserve magnitude information
+
+        Args:
+            total: Total flow (inflow + outflow)
+            net_flow: Net flow (outflow - inflow)
+
+        Returns:
+            total_log: Log-transformed total flow
+            net_flow_log: Signed log-transformed net flow
+        """
+        # Total: direct log transformation (always positive)
+        total_log = np.log1p(total)  # log(1 + x)
+
+        # Net flow: preserve sign with log transformation
+        net_flow_log = np.sign(net_flow) * np.log1p(np.abs(net_flow))
+
+        return total_log, net_flow_log
 
     def compute_temporal_change_features(self, flows_2021_raw, flows_2024_raw,
                                         flows_2021_norm, flows_2024_norm):
         """
         Compute temporal change features between two years
-
-        CRITICAL FIX: Compute relative change on RAW values, then normalize the result.
-        This avoids the mathematical error of computing ratios on Z-scores.
+        NEW: Uses log transformation to preserve magnitude information
 
         Args:
-            flows_2021_raw: Raw grid flows for 2021 {grid_id: array(168, 2)}
-            flows_2024_raw: Raw grid flows for 2024 {grid_id: array(168, 2)}
-            flows_2021_norm: Normalized grid flows for 2021 {grid_id: array(168, 2)}
-            flows_2024_norm: Normalized grid flows for 2024 {grid_id: array(168, 2)}
+            flows_2021_raw: Raw grid flows for 2021 {grid_id: array(7, 2)}
+            flows_2024_raw: Raw grid flows for 2024 {grid_id: array(7, 2)}
+            flows_2021_norm: Not used (kept for compatibility)
+            flows_2024_norm: Not used (kept for compatibility)
 
         Returns:
             Dictionary with change features for each grid
+            Shape: (7, 4) = [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]
         """
-        logger.info("Computing temporal change features (using raw values for relative change)")
+        logger.info("Computing temporal change features with log transformation")
 
         change_features = {}
-        all_rel_changes = []  # Collect all relative changes for global normalization
 
-        # First pass: compute relative changes and collect for global statistics
-        temp_rel_changes = {}
         for grid_id in flows_2021_raw.keys():
             if grid_id not in flows_2024_raw:
                 logger.warning(f"Grid {grid_id} not found in 2024 data, skipping")
                 continue
 
-            # Get raw flows for computing relative change
-            flow_2021_raw = flows_2021_raw[grid_id]  # (168, 2)
-            flow_2024_raw = flows_2024_raw[grid_id]  # (168, 2)
+            # Get raw flows (7, 2) - [inflow, outflow]
+            flow_2021_raw = flows_2021_raw[grid_id]  # (7, 2)
+            flow_2024_raw = flows_2024_raw[grid_id]  # (7, 2)
 
-            # Relative change (on RAW values to avoid Z-score division issues)
-            epsilon = 1e-6
-            rel_change_raw = (flow_2024_raw - flow_2021_raw) / (flow_2021_raw + epsilon)  # (168, 2)
+            # Compute total and net_flow for each year
+            # Total = inflow + outflow (flow intensity)
+            total_2021 = flow_2021_raw[:, 0] + flow_2021_raw[:, 1]  # (7,)
+            total_2024 = flow_2024_raw[:, 0] + flow_2024_raw[:, 1]  # (7,)
 
-            # Clip extreme values BEFORE normalization
-            rel_change_raw = np.clip(rel_change_raw, -10, 10)
+            # Net flow = outflow - inflow (spatial direction: positive=diffusion, negative=aggregation)
+            net_flow_2021 = flow_2021_raw[:, 1] - flow_2021_raw[:, 0]  # (7,)
+            net_flow_2024 = flow_2024_raw[:, 1] - flow_2024_raw[:, 0]  # (7,)
 
-            temp_rel_changes[grid_id] = rel_change_raw
-            all_rel_changes.append(rel_change_raw)
+            # Apply log transformation to preserve magnitude
+            total_2021_log, net_flow_2021_log = self.log_transform_features(total_2021, net_flow_2021)
+            total_2024_log, net_flow_2024_log = self.log_transform_features(total_2024, net_flow_2024)
 
-        # Compute global statistics for relative change normalization
-        all_rel_changes = np.concatenate(all_rel_changes, axis=0)
-        rel_change_mean = all_rel_changes.mean()
-        rel_change_std = all_rel_changes.std() + 1e-6
-
-        logger.info(f"Relative change statistics - Mean: {rel_change_mean:.4f}, Std: {rel_change_std:.4f}")
-
-        # Second pass: normalize and create final features
-        for grid_id in flows_2021_raw.keys():
-            if grid_id not in flows_2024_raw:
-                continue
-
-            # Get normalized flows for direct features
-            flow_2021_norm = flows_2021_norm[grid_id]  # (168, 2)
-            flow_2024_norm = flows_2024_norm[grid_id]  # (168, 2)
-
-            # 1. Absolute difference (on normalized values)
-            diff_norm = flow_2024_norm - flow_2021_norm  # (168, 2)
-
-            # 2. Normalize relative change using GLOBAL statistics
-            rel_change_norm = (temp_rel_changes[grid_id] - rel_change_mean) / rel_change_std
-
-            # 3. Total flow volumes (normalized)
-            total_2021_norm = flow_2021_norm.sum(axis=1, keepdims=True)  # (168, 1)
-            total_2024_norm = flow_2024_norm.sum(axis=1, keepdims=True)  # (168, 1)
-
-            # 4. Concatenate: [2021_flow_norm, 2024_flow_norm, diff_norm, rel_change_norm, total_2021_norm, total_2024_norm]
-            # Shape: (168, 10) = (168, 2+2+2+2+1+1)
-            combined = np.concatenate([
-                flow_2021_norm,      # (168, 2) - normalized
-                flow_2024_norm,      # (168, 2) - normalized
-                diff_norm,           # (168, 2) - normalized difference
-                rel_change_norm,     # (168, 2) - normalized relative change (computed from raw)
-                total_2021_norm,     # (168, 1) - normalized total
-                total_2024_norm      # (168, 1) - normalized total
+            # Concatenate: [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]
+            # Shape: (7, 4)
+            combined = np.stack([
+                total_2021_log,      # (7,)
+                total_2024_log,      # (7,)
+                net_flow_2021_log,   # (7,)
+                net_flow_2024_log    # (7,)
             ], axis=1)
 
             change_features[grid_id] = combined
 
         logger.info(f"Computed change features for {len(change_features)} grids")
+        logger.info(f"Feature shape per grid: (7, 4) = [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]")
 
         return change_features
 
@@ -328,6 +334,7 @@ class DualYearDataProcessor:
 def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_cache=True, cache_dir='data/cache'):
     """
     Prepare complete dataset for dual-year experiment with caching support
+    NEW: Includes dynamic graph snapshots for both years
 
     Args:
         label_path: Path to label file
@@ -336,21 +343,43 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
         cache_dir: Directory to store cached data
 
     Returns:
-        Dictionary with all prepared data including class_weights
+        Dictionary with all prepared data including class_weights and dynamic graphs
     """
     import os
     import pickle
     import hashlib
     from src.preprocessing.data_processor import GridMetadataProcessor
-    from src.preprocessing.graph_builder import SpatialGraphBuilder
+    from src.preprocessing.graph_builder import SpatialGraphBuilder, DynamicGraphBuilder
 
     # Create cache directory
     os.makedirs(cache_dir, exist_ok=True)
 
-    # Generate cache key based on label_path and samples_per_class
+    # Generate cache key with file content hash and modification times
+    # Strategy: Use content hash for label file (small), mtime for OD data files (large)
+
+    # 1. Label file content hash (small file, use content hash for 100% accuracy)
+    with open(label_path, 'rb') as f:
+        label_content_hash = hashlib.md5(f.read()).hexdigest()[:8]
+
+    # 2. OD data file modification times (large files, use mtime for efficiency)
+    data_2021_path = 'data/2021.csv'
+    data_2024_path = 'data/2024.csv'
+
+    if os.path.exists(data_2021_path):
+        data_2021_mtime = int(os.path.getmtime(data_2021_path))
+    else:
+        data_2021_mtime = 0
+
+    if os.path.exists(data_2024_path):
+        data_2024_mtime = int(os.path.getmtime(data_2024_path))
+    else:
+        data_2024_mtime = 0
+
+    # 3. Generate cache key
     label_basename = os.path.basename(label_path)
-    cache_key = f"{label_basename}_samples_{samples_per_class}"
-    cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:8]
+    cache_key = f"{label_basename}_{label_content_hash}_samples_{samples_per_class}_data_{data_2021_mtime}_{data_2024_mtime}_v3"
+    cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:12]  # Use 12-char hash for better uniqueness
+
     cache_file = os.path.join(cache_dir, f"dual_year_data_{cache_hash}.pkl")
     cache_info_file = os.path.join(cache_dir, f"dual_year_data_{cache_hash}_info.txt")
 
@@ -362,19 +391,34 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
         logger.info(f"Cache file: {cache_file}")
 
         try:
+            import time
+            load_start = time.time()
+
             with open(cache_file, 'rb') as f:
                 data = pickle.load(f)
 
-            # Display cache info
-            if os.path.exists(cache_info_file):
-                with open(cache_info_file, 'r') as f:
-                    logger.info(f.read())
+            load_time = time.time() - load_start
 
-            logger.info("✓ Successfully loaded cached data!")
-            logger.info(f"  - Total grids: {len(data['labels'])}")
-            logger.info(f"  - Graph edges: {data['edge_index'].shape[1]}")
-            logger.info("=" * 80)
-            return data
+            # Validate cache integrity
+            required_keys = ['labels', 'change_features', 'graphs_2021', 'graphs_2024', 'class_weights']
+            missing_keys = [k for k in required_keys if k not in data]
+            if missing_keys:
+                logger.warning(f"Cache is missing keys: {missing_keys}")
+                logger.info("Regenerating cache...")
+                # Continue to regenerate cache
+            else:
+                # Display cache info
+                if os.path.exists(cache_info_file):
+                    with open(cache_info_file, 'r') as f:
+                        logger.info(f.read())
+
+                logger.info("✓ Successfully loaded cached data!")
+                logger.info(f"  - Total grids: {len(data['labels'])}")
+                logger.info(f"  - Graphs 2021: {len(data['graphs_2021'])} daily snapshots")
+                logger.info(f"  - Graphs 2024: {len(data['graphs_2024'])} daily snapshots")
+                logger.info(f"  - Load time: {load_time:.2f} seconds")
+                logger.info("=" * 80)
+                return data
 
         except Exception as e:
             logger.warning(f"Failed to load cache: {e}")
@@ -441,19 +485,27 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     dual_year_processor = DualYearDataProcessor(year1=2021, year2=2024)
     dual_year_data = dual_year_processor.prepare_dual_year_data(sampled_grid_ids, valid_grid_ids)
 
-    # Build spatial graph (using 2024 data for current spatial structure)
-    logger.info("Building spatial graph...")
+    # Build spatial graph builder
+    logger.info("Building spatial graphs...")
     metadata_sampled = metadata_df[metadata_df['grid_id'].isin(sampled_grid_ids)].copy()
     graph_builder = SpatialGraphBuilder(metadata_sampled, k_neighbors=8)
+
+    # Build dynamic graphs for both years (7 daily snapshots each)
+    dynamic_graph_builder = DynamicGraphBuilder(graph_builder, time_window=24)
+    graphs_2021 = dynamic_graph_builder.build_daily_graphs(dual_year_data['od_2021'], num_days=7)
+    graphs_2024 = dynamic_graph_builder.build_daily_graphs(dual_year_data['od_2024'], num_days=7)
+
+    # Also build a static graph for compatibility (using 2024 data)
     edge_index, edge_weights = graph_builder.build_hybrid_graph(dual_year_data['od_2024'])
 
     # Create grid_id to index mapping
-    # CRITICAL FIX: Use the mapping from graph_builder to ensure consistency with edge_index
     grid_id_to_idx = graph_builder.grid_id_to_idx
 
     logger.info(f"\nComplete data preparation:")
     logger.info(f"  - Total grids: {len(labels)}")
-    logger.info(f"  - Graph edges: {edge_index.shape[1]}")
+    logger.info(f"  - Static graph edges: {edge_index.shape[1]}")
+    logger.info(f"  - Dynamic graphs 2021: {len(graphs_2021)} daily snapshots")
+    logger.info(f"  - Dynamic graphs 2024: {len(graphs_2024)} daily snapshots")
     logger.info(f"  - Feature dimension: {list(dual_year_data['change_features'].values())[0].shape}")
 
     data = {
@@ -462,8 +514,10 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
         'change_features': dual_year_data['change_features'],
         'flows_2021': dual_year_data['flows_2021'],
         'flows_2024': dual_year_data['flows_2024'],
-        'edge_index': edge_index,
+        'edge_index': edge_index,  # Static graph for compatibility
         'edge_weights': edge_weights,
+        'graphs_2021': graphs_2021,  # NEW: Dynamic graphs for 2021
+        'graphs_2024': graphs_2024,  # NEW: Dynamic graphs for 2024
         'grid_id_to_idx': grid_id_to_idx,
         'norm_params_2021': dual_year_data['norm_params_2021'],
         'norm_params_2024': dual_year_data['norm_params_2024'],
@@ -484,9 +538,14 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
             with open(cache_info_file, 'w') as f:
                 f.write(f"Cache Information:\n")
                 f.write(f"  Label file: {label_path}\n")
+                f.write(f"  Label file hash: {label_content_hash}\n")
+                f.write(f"  Data 2021 mtime: {data_2021_mtime}\n")
+                f.write(f"  Data 2024 mtime: {data_2024_mtime}\n")
                 f.write(f"  Samples per class: {samples_per_class if samples_per_class else 'ALL'}\n")
                 f.write(f"  Total grids: {len(labels)}\n")
-                f.write(f"  Graph edges: {edge_index.shape[1]}\n")
+                f.write(f"  Static graph edges: {edge_index.shape[1]}\n")
+                f.write(f"  Dynamic graphs 2021: {len(graphs_2021)} daily snapshots\n")
+                f.write(f"  Dynamic graphs 2024: {len(graphs_2024)} daily snapshots\n")
                 f.write(f"  Feature shape: {list(dual_year_data['change_features'].values())[0].shape}\n")
                 f.write(f"  Class distribution:\n")
                 for i in range(config.NUM_CLASSES):
@@ -494,7 +553,12 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
                     weight = class_weights[i].item()
                     f.write(f"    Class {i+1}: {count} samples (weight: {weight:.4f})\n")
 
+            # Get cache file size
+            cache_size_mb = os.path.getsize(cache_file) / (1024 * 1024)
+
             logger.info("✓ Cache saved successfully!")
+            logger.info(f"  Cache size: {cache_size_mb:.2f} MB")
+            logger.info(f"  Cache location: {os.path.abspath(cache_file)}")
             logger.info(f"  Next run will load from cache in ~1 second")
 
         except Exception as e:

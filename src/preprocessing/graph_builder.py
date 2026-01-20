@@ -64,7 +64,7 @@ class SpatialGraphBuilder:
 
         return edge_index, edge_weights
 
-    def build_flow_graph(self, od_df: pd.DataFrame, threshold: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+    def build_flow_graph(self, od_df: pd.DataFrame, threshold: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
         """
         Build graph based on OD flow patterns
 
@@ -190,6 +190,50 @@ class DynamicGraphBuilder:
             graphs.append((edge_index, edge_weights))
 
         logger.info(f"Created {len(graphs)} temporal graphs")
+
+        return graphs
+
+    def build_daily_graphs(self, od_df: pd.DataFrame, num_days: int = 7) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Build sequence of daily graphs (one graph per day)
+        NEW: For dual-year model with daily snapshots
+
+        Args:
+            od_df: OD flow DataFrame with date_dt column
+            num_days: Number of days (default 7)
+
+        Returns:
+            List of (edge_index, edge_weights) for each day
+        """
+        logger.info(f"Building daily graphs for {num_days} days")
+
+        graphs = []
+
+        # Get date range
+        min_date = od_df['date_dt'].min()
+
+        for day_idx in range(num_days):
+            # Get data for current day
+            current_date = min_date + pd.Timedelta(days=day_idx)
+            next_date = current_date + pd.Timedelta(days=1)
+
+            day_df = od_df[
+                (od_df['date_dt'] >= current_date) &
+                (od_df['date_dt'] < next_date)
+            ]
+
+            if len(day_df) > 0:
+                # Build graph for this day
+                edge_index, edge_weights = self.graph_builder.build_hybrid_graph(day_df)
+            else:
+                # If no data for this day, use empty graph
+                logger.warning(f"No data for day {day_idx}, using empty graph")
+                edge_index = np.zeros((2, 0))
+                edge_weights = np.array([])
+
+            graphs.append((edge_index, edge_weights))
+
+        logger.info(f"Created {len(graphs)} daily graphs")
 
         return graphs
 

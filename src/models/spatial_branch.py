@@ -170,15 +170,16 @@ class DySATNet(nn.Module):
 
         self.output_size = hidden_size * heads
 
-    def forward(self, x, edge_index, edge_attr=None, batch_time_steps=None):
+    def forward(self, x, edge_index, edge_attr=None, batch_time_steps=None, graphs=None):
         """
-        Forward pass
+        Forward pass with support for dynamic graphs
 
         Args:
             x: Node features (num_nodes, input_size) or (num_nodes, time_steps, input_size)
             edge_index: Edge indices (2, num_edges) or list of edge indices for each time step
             edge_attr: Edge attributes
             batch_time_steps: Number of time steps in batch (for temporal attention)
+            graphs: List of (edge_index, edge_attr) tuples for dynamic graphs (NEW)
 
         Returns:
             Node embeddings (num_nodes, output_size)
@@ -198,17 +199,22 @@ class DySATNet(nn.Module):
                 x_t = x[t]  # (num_nodes, input_size)
 
                 # Get edge index for this time step
-                if isinstance(edge_index, list):
+                # NEW: Support dynamic graphs via graphs parameter
+                if graphs is not None:
+                    edge_index_t, edge_attr_t = graphs[t]
+                elif isinstance(edge_index, list):
                     edge_index_t = edge_index[t]
+                    edge_attr_t = edge_attr[t] if isinstance(edge_attr, list) else edge_attr
                 else:
                     edge_index_t = edge_index
+                    edge_attr_t = edge_attr
 
                 # Project input
                 h = self.input_proj(x_t)
 
                 # Apply structural attention layers
                 for layer in self.structural_layers:
-                    h = layer(h, edge_index_t, edge_attr)
+                    h = layer(h, edge_index_t, edge_attr_t)
                     h = F.elu(h)
 
                 temporal_embeddings.append(h)
@@ -236,6 +242,84 @@ class DySATNet(nn.Module):
             output = h
 
         return output
+
+
+class DualYearDySAT(nn.Module):
+    """Dual-year DySAT wrapper for parallel processing of 2021 and 2024"""
+
+    def __init__(self,
+                 input_size: int = 2,  # [total_log, net_flow_log]
+                 hidden_size: int = config.DYSAT_HIDDEN_SIZE,
+                 num_layers: int = config.DYSAT_LAYERS,
+                 heads: int = config.DYSAT_HEADS,
+                 dropout: float = config.DYSAT_DROPOUT,
+                 num_time_steps: int = 7,  # 7 daily snapshots
+                 output_size: int = 256):
+        """
+        Initialize dual-year DySAT
+
+        Args:
+            input_size: Input feature dimension per year
+            hidden_size: Hidden feature dimension
+            num_layers: Number of structural attention layers
+            heads: Number of attention heads
+            dropout: Dropout rate
+            num_time_steps: Number of time steps (7 days)
+            output_size: Output feature size
+        """
+        super(DualYearDySAT, self).__init__()
+
+        # Shared DySAT network (processes both years with same weights)
+        self.dysat = DySATNet(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            heads=heads,
+            dropout=dropout,
+            num_time_steps=num_time_steps
+        )
+
+        # Projection layer
+        self.projection = nn.Sequential(
+            nn.Linear(self.dysat.output_size, output_size),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, node_indices=None):
+        """
+        Forward pass for both years
+
+        Args:
+            x_2021: Node features for 2021 (num_nodes, 7, 2)
+            x_2024: Node features for 2024 (num_nodes, 7, 2)
+            graphs_2021: List of 7 (edge_index, edge_attr) tuples for 2021
+            graphs_2024: List of 7 (edge_index, edge_attr) tuples for 2024
+            node_indices: Optional node indices for subgraph extraction
+
+        Returns:
+            h_2021: Features for 2021 (num_nodes, output_size)
+            h_2024: Features for 2024 (num_nodes, output_size)
+            diff: Difference features (num_nodes, output_size)
+        """
+        # Process 2021 with dynamic graphs
+        spatial_2021 = self.dysat(x_2021, edge_index=None, edge_attr=None, graphs=graphs_2021)
+        h_2021 = self.projection(spatial_2021)
+
+        # Process 2024 with dynamic graphs
+        spatial_2024 = self.dysat(x_2024, edge_index=None, edge_attr=None, graphs=graphs_2024)
+        h_2024 = self.projection(spatial_2024)
+
+        # Compute difference (spatial change pattern)
+        diff = h_2024 - h_2021
+
+        # If node_indices provided, extract subgraph features
+        if node_indices is not None:
+            h_2021 = h_2021[node_indices]
+            h_2024 = h_2024[node_indices]
+            diff = diff[node_indices]
+
+        return h_2021, h_2024, diff
 
 
 class SpatialBranch(nn.Module):
@@ -281,7 +365,7 @@ class SpatialBranch(nn.Module):
             nn.Linear(output_size, output_size)
         )
 
-    def forward(self, x, edge_index, edge_attr=None):
+    def forward(self, x, edge_index, edge_attr=None, graphs=None):
         """
         Forward pass
 
@@ -289,13 +373,14 @@ class SpatialBranch(nn.Module):
             x: Node features (num_nodes, time_steps, features) for temporal DySAT
             edge_index: Edge indices
             edge_attr: Edge attributes
+            graphs: List of (edge_index, edge_attr) tuples for dynamic graphs
 
         Returns:
             Spatial features (num_nodes, output_size)
         """
         # Extract spatial features using DySAT with temporal attention
         # x should be (num_nodes, time_steps, features) for temporal processing
-        spatial_features = self.dysat(x, edge_index, edge_attr)
+        spatial_features = self.dysat(x, edge_index, edge_attr, graphs=graphs)
 
         # Project to output size
         output = self.projection(spatial_features)
@@ -308,20 +393,40 @@ if __name__ == "__main__":
     print("Testing Spatial Branch")
 
     num_nodes = 100
-    input_size = 168 * 2  # 168 hours * 2 features (inflow + outflow)
+    num_time_steps = 7  # NEW: 7 daily snapshots
+    input_size = 2  # [total_log, net_flow_log]
     num_edges = 500
 
-    # Create dummy input
-    x = torch.randn(num_nodes, input_size)
-    edge_index = torch.randint(0, num_nodes, (2, num_edges))
+    # Create dummy input for temporal processing
+    x_2021 = torch.randn(num_nodes, num_time_steps, input_size)
+    x_2024 = torch.randn(num_nodes, num_time_steps, input_size)
 
-    # Initialize model
-    model = SpatialBranch(input_size=input_size)
+    # Create dummy dynamic graphs (7 snapshots per year)
+    graphs_2021 = []
+    graphs_2024 = []
+    for t in range(num_time_steps):
+        edge_index = torch.randint(0, num_nodes, (2, num_edges))
+        edge_attr = torch.randn(num_edges, 1)
+        graphs_2021.append((edge_index, edge_attr))
+        graphs_2024.append((edge_index, edge_attr))
 
-    # Forward pass
-    output = model(x, edge_index)
+    # Test old model
+    print("\n=== Old SpatialBranch ===")
+    old_model = SpatialBranch(input_size=168*2, num_time_steps=None)
+    old_x = torch.randn(num_nodes, 168*2)
+    old_edge_index = torch.randint(0, num_nodes, (2, num_edges))
+    old_output = old_model(old_x, old_edge_index)
+    print(f"Input shape: (num_nodes, 168*2)")
+    print(f"Output shape: {old_output.shape}")
 
-    print(f"Input shape: {x.shape}")
-    print(f"Edge index shape: {edge_index.shape}")
-    print(f"Output shape: {output.shape}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
+    # Test new dual-year model
+    print("\n=== New DualYearDySAT ===")
+    new_model = DualYearDySAT(input_size=2, num_time_steps=7)
+    h_2021, h_2024, diff = new_model(x_2021, x_2024, graphs_2021, graphs_2024)
+    print(f"Input shape: (num_nodes, 7, 2) x 2 years")
+    print(f"Output shapes:")
+    print(f"  h_2021: {h_2021.shape}")
+    print(f"  h_2024: {h_2024.shape}")
+    print(f"  diff: {diff.shape}")
+    print(f"Expected: (num_nodes, 256) for each")
+    print(f"Model parameters: {sum(p.numel() for p in new_model.parameters())}")

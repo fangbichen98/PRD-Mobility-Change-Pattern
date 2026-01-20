@@ -4,8 +4,8 @@ Complete model: Dual-branch spatiotemporal model with attention fusion
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .temporal_branch import TemporalBranch
-from .spatial_branch import SpatialBranch
+from .temporal_branch import TemporalBranch, ParallelTemporalBranch
+from .spatial_branch import SpatialBranch, DualYearDySAT
 import config
 
 
@@ -86,6 +86,73 @@ class AttentionFusion(nn.Module):
 
         # Output projection
         output = self.output_proj(fused)
+
+        return output
+
+
+class MultiFeatureAttentionFusion(nn.Module):
+    """Multi-feature attention fusion for 9 features (6 temporal + 3 spatial)"""
+
+    def __init__(self,
+                 feature_size: int = 256,
+                 num_heads: int = config.ATTENTION_HEADS,
+                 dropout: float = 0.2):
+        """
+        Initialize multi-feature attention fusion
+
+        Args:
+            feature_size: Size of each input feature
+            num_heads: Number of attention heads
+            dropout: Dropout rate
+        """
+        super(MultiFeatureAttentionFusion, self).__init__()
+
+        self.feature_size = feature_size
+        self.num_heads = num_heads
+        self.head_dim = feature_size // num_heads
+
+        assert feature_size % num_heads == 0, "feature_size must be divisible by num_heads"
+
+        # Multi-head attention
+        self.attention = nn.MultiheadAttention(
+            embed_dim=feature_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+
+        # Layer normalization
+        self.norm = nn.LayerNorm(feature_size)
+
+        # Output projection
+        self.output_proj = nn.Sequential(
+            nn.Linear(feature_size, feature_size),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, features):
+        """
+        Forward pass
+
+        Args:
+            features: Stacked features (batch_size, num_features, feature_size)
+                     num_features = 9 (6 temporal + 3 spatial)
+
+        Returns:
+            Fused features (batch_size, feature_size)
+        """
+        # Self-attention over all features
+        attn_out, _ = self.attention(features, features, features)
+
+        # Average pooling over features
+        pooled = attn_out.mean(dim=1)  # (batch_size, feature_size)
+
+        # Layer norm
+        normed = self.norm(pooled)
+
+        # Output projection
+        output = self.output_proj(normed)
 
         return output
 
@@ -273,31 +340,193 @@ class BaselineGAT(nn.Module):
         return logits
 
 
+class ImprovedDualBranchModel(nn.Module):
+    """Improved dual-branch model with parallel temporal and spatial processing"""
+
+    def __init__(self,
+                 temporal_input_size: int = 2,  # [total_log, net_flow_log]
+                 spatial_input_size: int = 2,   # [total_log, net_flow_log]
+                 hidden_size: int = 256,
+                 num_classes: int = config.NUM_CLASSES,
+                 num_time_steps: int = 7,  # 7 daily snapshots
+                 dropout: float = 0.2):
+        """
+        Initialize improved dual-branch model
+
+        Args:
+            temporal_input_size: Input size per year for temporal branch
+            spatial_input_size: Input size per year for spatial branch
+            hidden_size: Hidden feature size
+            num_classes: Number of output classes
+            num_time_steps: Number of time steps (7 days)
+            dropout: Dropout rate
+        """
+        super(ImprovedDualBranchModel, self).__init__()
+
+        # Parallel temporal branch (LSTM + SPP)
+        self.temporal_branch = ParallelTemporalBranch(
+            input_size=temporal_input_size,
+            output_size=hidden_size
+        )
+
+        # Dual-year spatial branch (DySAT)
+        self.spatial_branch = DualYearDySAT(
+            input_size=spatial_input_size,
+            num_time_steps=num_time_steps,
+            output_size=hidden_size
+        )
+
+        # Multi-feature attention fusion (9 features: 6 temporal + 3 spatial)
+        self.fusion = MultiFeatureAttentionFusion(
+            feature_size=hidden_size,
+            dropout=dropout
+        )
+
+        # Classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size // 2, num_classes)
+        )
+
+    def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, node_indices=None):
+        """
+        Forward pass
+
+        Args:
+            x_2021: Temporal features for 2021 (batch_size, 7, 2) or (num_nodes, 7, 2)
+            x_2024: Temporal features for 2024 (batch_size, 7, 2) or (num_nodes, 7, 2)
+            graphs_2021: List of 7 (edge_index, edge_attr) tuples for 2021
+            graphs_2024: List of 7 (edge_index, edge_attr) tuples for 2024
+            node_indices: Optional node indices for subgraph extraction
+
+        Returns:
+            Class logits (batch_size, num_classes)
+        """
+        # Determine if we need to extract batch features
+        # If node_indices is provided, x_2021/x_2024 are full graph features
+        if node_indices is not None:
+            # Extract batch features for temporal branch
+            x_2021_batch = x_2021[node_indices]  # (batch_size, 7, 2)
+            x_2024_batch = x_2024[node_indices]  # (batch_size, 7, 2)
+
+            # Extract temporal features (6 features: LSTM + SPP for both years + diff)
+            temporal_features = self.temporal_branch(x_2021_batch, x_2024_batch)
+            # Shape: (batch_size, 6, hidden_size)
+
+            # Extract spatial features (3 features: 2021 + 2024 + diff)
+            # Spatial branch processes full graph and extracts batch nodes
+            spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
+                x_2021, x_2024, graphs_2021, graphs_2024, node_indices=node_indices
+            )
+        else:
+            # Input is already batch-level
+            x_2021_batch = x_2021
+            x_2024_batch = x_2024
+
+            # Extract temporal features
+            temporal_features = self.temporal_branch(x_2021_batch, x_2024_batch)
+
+            # Extract spatial features (no node extraction needed)
+            spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
+                x_2021_batch, x_2024_batch, graphs_2021, graphs_2024, node_indices=None
+            )
+
+        # Stack spatial features: (batch_size, 3, hidden_size)
+        spatial_features = torch.stack([spatial_2021, spatial_2024, spatial_diff], dim=1)
+
+        # Concatenate temporal and spatial features: (batch_size, 9, hidden_size)
+        all_features = torch.cat([temporal_features, spatial_features], dim=1)
+
+        # Fuse features using multi-head attention
+        fused_features = self.fusion(all_features)
+
+        # Classify
+        logits = self.classifier(fused_features)
+
+        return logits
+
+    def get_embeddings(self, x_2021, x_2024, graphs_2021, graphs_2024, node_indices=None):
+        """
+        Get fused embeddings without classification
+
+        Args:
+            x_2021: Temporal features for 2021
+            x_2024: Temporal features for 2024
+            graphs_2021: Dynamic graphs for 2021
+            graphs_2024: Dynamic graphs for 2024
+            node_indices: Optional node indices
+
+        Returns:
+            Fused embeddings (batch_size, hidden_size)
+        """
+        # Extract features
+        temporal_features = self.temporal_branch(x_2021, x_2024)
+        spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
+            x_2021, x_2024, graphs_2021, graphs_2024, node_indices=node_indices
+        )
+        spatial_features = torch.stack([spatial_2021, spatial_2024, spatial_diff], dim=1)
+
+        # Concatenate and fuse
+        all_features = torch.cat([temporal_features, spatial_features], dim=1)
+        fused_features = self.fusion(all_features)
+
+        return fused_features
+
+
 if __name__ == "__main__":
     # Test complete model
-    print("Testing Dual-Branch Spatiotemporal Model")
+    print("Testing Improved Dual-Branch Spatiotemporal Model")
 
     batch_size = 8
-    seq_len = 168
-    temporal_input_size = 2
     num_nodes = 100
-    spatial_input_size = 336
+    num_time_steps = 7
+    input_size = 2  # [total_log, net_flow_log]
     num_edges = 500
 
     # Create dummy inputs
-    temporal_input = torch.randn(batch_size, seq_len, temporal_input_size)
-    spatial_input = torch.randn(num_nodes, spatial_input_size)
-    edge_index = torch.randint(0, num_nodes, (2, num_edges))
+    x_2021 = torch.randn(num_nodes, num_time_steps, input_size)
+    x_2024 = torch.randn(num_nodes, num_time_steps, input_size)
+
+    # Create dummy dynamic graphs
+    graphs_2021 = []
+    graphs_2024 = []
+    for t in range(num_time_steps):
+        edge_index = torch.randint(0, num_nodes, (2, num_edges))
+        edge_attr = torch.randn(num_edges, 1)
+        graphs_2021.append((edge_index, edge_attr))
+        graphs_2024.append((edge_index, edge_attr))
+
+    # Node indices for batch
+    node_indices = torch.randint(0, num_nodes, (batch_size,))
 
     # Initialize model
-    model = DualBranchSTModel()
+    model = ImprovedDualBranchModel(
+        temporal_input_size=input_size,
+        spatial_input_size=input_size,
+        num_time_steps=num_time_steps
+    )
 
-    # Forward pass (need to handle batch/node mismatch in practice)
-    # For testing, we'll use first batch_size nodes
-    spatial_input_batch = spatial_input[:batch_size]
-    output = model(temporal_input, spatial_input_batch, edge_index)
+    # Forward pass
+    output = model(x_2021, x_2024, graphs_2021, graphs_2024, node_indices=node_indices)
 
-    print(f"Temporal input shape: {temporal_input.shape}")
-    print(f"Spatial input shape: {spatial_input.shape}")
+    print(f"Input shapes:")
+    print(f"  x_2021: {x_2021.shape}")
+    print(f"  x_2024: {x_2024.shape}")
+    print(f"  graphs: {len(graphs_2021)} snapshots per year")
+    print(f"  node_indices: {node_indices.shape}")
     print(f"Output shape: {output.shape}")
+    print(f"Expected: ({batch_size}, {config.NUM_CLASSES})")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
+
+    # Test old model for comparison
+    print("\n=== Old DualBranchSTModel ===")
+    old_model = DualBranchSTModel()
+    temporal_input = torch.randn(batch_size, 168, 2)
+    spatial_input = torch.randn(batch_size, 336)
+    edge_index = torch.randint(0, num_nodes, (2, num_edges))
+    old_output = old_model(temporal_input, spatial_input, edge_index)
+    print(f"Input shapes: temporal={temporal_input.shape}, spatial={spatial_input.shape}")
+    print(f"Output shape: {old_output.shape}")
+    print(f"Model parameters: {sum(p.numel() for p in old_model.parameters())}")
