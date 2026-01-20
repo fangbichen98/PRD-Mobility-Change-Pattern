@@ -341,7 +341,13 @@ class BaselineGAT(nn.Module):
 
 
 class ImprovedDualBranchModel(nn.Module):
-    """Improved dual-branch model with parallel temporal and spatial processing"""
+    """Improved dual-branch model with parallel temporal and spatial processing
+
+    This model outputs three types of predictions:
+    1. Intensity classification (3 classes): Stable, Growth, Decline
+    2. Direction classification (3 classes): Balanced, Aggregation, Diffusion
+    3. Final classification (9 classes): Combined intensity × direction
+    """
 
     def __init__(self,
                  temporal_input_size: int = 2,  # [total_log, net_flow_log]
@@ -349,7 +355,8 @@ class ImprovedDualBranchModel(nn.Module):
                  hidden_size: int = 256,
                  num_classes: int = config.NUM_CLASSES,
                  num_time_steps: int = 7,  # 7 daily snapshots
-                 dropout: float = 0.2):
+                 dropout: float = 0.2,
+                 use_hierarchical: bool = True):
         """
         Initialize improved dual-branch model
 
@@ -357,11 +364,14 @@ class ImprovedDualBranchModel(nn.Module):
             temporal_input_size: Input size per year for temporal branch
             spatial_input_size: Input size per year for spatial branch
             hidden_size: Hidden feature size
-            num_classes: Number of output classes
+            num_classes: Number of output classes (should be 9)
             num_time_steps: Number of time steps (7 days)
             dropout: Dropout rate
+            use_hierarchical: If True, use hierarchical classification (3×3)
         """
         super(ImprovedDualBranchModel, self).__init__()
+
+        self.use_hierarchical = use_hierarchical
 
         # Parallel temporal branch (LSTM + SPP)
         self.temporal_branch = ParallelTemporalBranch(
@@ -382,13 +392,39 @@ class ImprovedDualBranchModel(nn.Module):
             dropout=dropout
         )
 
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size // 2, num_classes)
-        )
+        if use_hierarchical:
+            # Hierarchical classification heads
+            # Head 1: Flow intensity (Stable/Growth/Decline)
+            self.intensity_classifier = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size // 2, 3)  # 3 classes
+            )
+
+            # Head 2: Spatial direction (Balanced/Aggregation/Diffusion)
+            self.direction_classifier = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size // 2, 3)  # 3 classes
+            )
+
+            # Head 3: Direct 9-class classification (for comparison)
+            self.direct_classifier = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size // 2, num_classes)  # 9 classes
+            )
+        else:
+            # Original single classification head
+            self.classifier = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size // 2, num_classes)
+            )
 
     def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, node_indices=None):
         """
@@ -402,7 +438,12 @@ class ImprovedDualBranchModel(nn.Module):
             node_indices: Optional node indices for subgraph extraction
 
         Returns:
-            Class logits (batch_size, num_classes)
+            If use_hierarchical=True:
+                intensity_logits: (batch_size, 3) - Flow intensity classification
+                direction_logits: (batch_size, 3) - Spatial direction classification
+                direct_logits: (batch_size, 9) - Direct 9-class classification
+            If use_hierarchical=False:
+                logits: (batch_size, num_classes) - Single classification output
         """
         # Determine if we need to extract batch features
         # If node_indices is provided, x_2021/x_2024 are full graph features
@@ -442,10 +483,18 @@ class ImprovedDualBranchModel(nn.Module):
         # Fuse features using multi-head attention
         fused_features = self.fusion(all_features)
 
-        # Classify
-        logits = self.classifier(fused_features)
+        # Classification
+        if self.use_hierarchical:
+            # Three classification outputs
+            intensity_logits = self.intensity_classifier(fused_features)  # (batch_size, 3)
+            direction_logits = self.direction_classifier(fused_features)  # (batch_size, 3)
+            direct_logits = self.direct_classifier(fused_features)        # (batch_size, 9)
 
-        return logits
+            return intensity_logits, direction_logits, direct_logits
+        else:
+            # Single classification output
+            logits = self.classifier(fused_features)
+            return logits
 
     def get_embeddings(self, x_2021, x_2024, graphs_2021, graphs_2024, node_indices=None):
         """
