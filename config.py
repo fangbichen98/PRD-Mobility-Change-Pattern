@@ -57,8 +57,8 @@ FUSION_HIDDEN_SIZE = 256
 ATTENTION_HEADS = 4
 
 # Training parameters
-BATCH_SIZE = 2  # Temporarily reduced for subgraph extraction testing
-LEARNING_RATE = 0.01
+BATCH_SIZE = 32  # Temporarily reduced for subgraph extraction testing
+LEARNING_RATE = 0.001
 NUM_EPOCHS = 100
 EARLY_STOPPING_PATIENCE = 15
 WEIGHT_DECAY = 1e-5

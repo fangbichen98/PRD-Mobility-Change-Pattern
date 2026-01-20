@@ -56,9 +56,9 @@
 
   # 组合使用
   python3 train_improved.py \
-      --label-path data/labels_custom.csv \
+      --label-path data/labels_copy.csv \
       --experiment-name custom_exp \
-      --samples-per-class 200
+      --samples-per-class 
 
 
 
