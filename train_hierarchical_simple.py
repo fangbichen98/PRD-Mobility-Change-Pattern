@@ -256,7 +256,15 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(f"{output_dir}/models", exist_ok=True)
     os.makedirs(f"{output_dir}/metrics", exist_ok=True)
+    
+    # 添加文件日志处理器，将日志保存到文件
+    file_handler = logging.FileHandler(f"{output_dir}/training.log", encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+    
     logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Log file: {output_dir}/training.log")
 
     # 1. 加载数据
     logger.info("\n" + "=" * 80)
