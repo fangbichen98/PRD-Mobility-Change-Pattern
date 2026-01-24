@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import torch
 import logging
+import os
 from tqdm import tqdm
 import config
 
@@ -210,24 +211,36 @@ class DualYearDataProcessor:
         return total_log, net_flow_log
 
     def compute_temporal_change_features(self, flows_2021_raw, flows_2024_raw,
-                                        flows_2021_norm, flows_2024_norm):
+                                        flows_2021_norm, flows_2024_norm,
+                                        ellipse_data=None):
         """
         Compute temporal change features between two years
         NEW: Uses log transformation to preserve magnitude information
+        NEW: Optionally integrates ellipse features for direction modeling
 
         Args:
             flows_2021_raw: Raw grid flows for 2021 {grid_id: array(7, 2)}
             flows_2024_raw: Raw grid flows for 2024 {grid_id: array(7, 2)}
             flows_2021_norm: Not used (kept for compatibility)
             flows_2024_norm: Not used (kept for compatibility)
+            ellipse_data: Ellipse data dictionary (from JSON), optional
 
         Returns:
             Dictionary with change features for each grid
-            Shape: (7, 4) = [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]
+            Shape: (7, 4) without ellipse or (7, 8) with ellipse
+            Without: [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]
+            With: [..., eccentricity_2021, log_area_2021, eccentricity_2024, log_area_2024]
         """
         logger.info("Computing temporal change features with log transformation")
 
+        # If ellipse data provided, load feature extraction function
+        if ellipse_data is not None:
+            from .ellipse_features import compute_ellipse_features_dual_year
+            logger.info("Using ellipse features for direction modeling")
+
         change_features = {}
+        grids_with_ellipse = 0
+        grids_without_ellipse = 0
 
         for grid_id in flows_2021_raw.keys():
             if grid_id not in flows_2024_raw:
@@ -251,19 +264,50 @@ class DualYearDataProcessor:
             total_2021_log, net_flow_2021_log = self.log_transform_features(total_2021, net_flow_2021)
             total_2024_log, net_flow_2024_log = self.log_transform_features(total_2024, net_flow_2024)
 
-            # Concatenate: [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]
-            # Shape: (7, 4)
-            combined = np.stack([
-                total_2021_log,      # (7,)
-                total_2024_log,      # (7,)
-                net_flow_2021_log,   # (7,)
-                net_flow_2024_log    # (7,)
-            ], axis=1)
+            # Extract ellipse features if available
+            if ellipse_data is not None:
+                ellipse_feats = compute_ellipse_features_dual_year(grid_id, ellipse_data)
+
+                if ellipse_feats is not None:
+                    grids_with_ellipse += 1
+                    # Ellipse features broadcast to 7 days: (4,) -> (7, 4)
+                    ellipse_array = np.array([
+                        ellipse_feats['eccentricity_2021'],
+                        ellipse_feats['log_area_2021'],
+                        ellipse_feats['eccentricity_2024'],
+                        ellipse_feats['log_area_2024'],
+                    ])  # (4,)
+                    ellipse_array_7d = np.tile(ellipse_array, (7, 1))  # (7, 4)
+
+                    # Concatenate: (7, 4) + (7, 4) = (7, 8)
+                    combined = np.concatenate([
+                        np.stack([total_2021_log, total_2024_log,
+                                 net_flow_2021_log, net_flow_2024_log], axis=1),  # (7, 4)
+                        ellipse_array_7d  # (7, 4)
+                    ], axis=1)
+                else:
+                    grids_without_ellipse += 1
+                    # If this grid has no ellipse data, use only flow features
+                    combined = np.stack([
+                        total_2021_log, total_2024_log,
+                        net_flow_2021_log, net_flow_2024_log
+                    ], axis=1)  # (7, 4)
+            else:
+                # No ellipse data provided, use only flow features
+                combined = np.stack([
+                    total_2021_log, total_2024_log,
+                    net_flow_2021_log, net_flow_2024_log
+                ], axis=1)  # (7, 4)
 
             change_features[grid_id] = combined
 
         logger.info(f"Computed change features for {len(change_features)} grids")
-        logger.info(f"Feature shape per grid: (7, 4) = [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]")
+        if ellipse_data is not None:
+            logger.info(f"  - Grids with ellipse features: {grids_with_ellipse}")
+            logger.info(f"  - Grids without ellipse features: {grids_without_ellipse}")
+            logger.info(f"Feature shape per grid: (7, 8) = [total_2021, total_2024, net_2021, net_2024, ecc_2021, area_2021, ecc_2024, area_2024]")
+        else:
+            logger.info(f"Feature shape per grid: (7, 4) = [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]")
 
         return change_features
 
@@ -281,6 +325,19 @@ class DualYearDataProcessor:
         logger.info("=" * 80)
         logger.info("Preparing Dual-Year Data (2021 vs 2024)")
         logger.info("=" * 80)
+
+        # Load ellipse data if available
+        ellipse_data = None
+        ellipse_path = 'data/ellipses.json'
+        if os.path.exists(ellipse_path):
+            logger.info(f"Loading ellipse data from {ellipse_path}")
+            from .ellipse_features import load_ellipse_data
+            ellipse_data = load_ellipse_data(ellipse_path)
+            logger.info(f"✓ Loaded ellipse data for years: {list(ellipse_data['years'].keys())}")
+            logger.info(f"  - 2021: {len(ellipse_data['years']['2021'])} grids")
+            logger.info(f"  - 2024: {len(ellipse_data['years']['2024'])} grids")
+        else:
+            logger.warning(f"Ellipse data not found at {ellipse_path}, using flow features only")
 
         # Load 2021 data
         od_2021 = self.load_year_data(self.year1, sampled_grid_ids)
@@ -309,10 +366,11 @@ class DualYearDataProcessor:
         flows_2021_norm = self.aggregate_grid_flows(od_2021, labeled_grid_ids, use_raw=False)
         flows_2024_norm = self.aggregate_grid_flows(od_2024, labeled_grid_ids, use_raw=False)
 
-        # Compute change features (using both raw and normalized)
+        # Compute change features (using both raw and normalized, plus ellipse data)
         change_features = self.compute_temporal_change_features(
             flows_2021_raw, flows_2024_raw,
-            flows_2021_norm, flows_2024_norm
+            flows_2021_norm, flows_2024_norm,
+            ellipse_data=ellipse_data
         )
 
         logger.info(f"\nDual-year data preparation completed:")

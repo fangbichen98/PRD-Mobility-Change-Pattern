@@ -25,8 +25,8 @@ TIME_STEPS = 7  # NEW: 7 daily snapshots (for improved model)
 AGGREGATION_METHOD = 'sum'  # Time aggregation method
 
 # Feature parameters
-TEMPORAL_INPUT_SIZE = 2  # [total_log, net_flow_log]
-SPATIAL_INPUT_SIZE = 2   # [total_log, net_flow_log]
+TEMPORAL_INPUT_SIZE = 2  # [total_log, net_flow_log] - flow features for temporal branch
+SPATIAL_INPUT_SIZE = 2   # [eccentricity, log_area] - ellipse features for spatial branch
 NORMALIZATION = 'log'  # 'log', 'none', 'zscore'
 USE_LOG_TRANSFORM = True
 
@@ -57,7 +57,7 @@ FUSION_HIDDEN_SIZE = 256
 ATTENTION_HEADS = 4
 
 # Training parameters
-BATCH_SIZE = 32  # Temporarily reduced for subgraph extraction testing
+BATCH_SIZE = 16  # Reduced from 32 to avoid GPU OOM with ellipse features
 LEARNING_RATE = 0.001
 NUM_EPOCHS = 100
 EARLY_STOPPING_PATIENCE = 15

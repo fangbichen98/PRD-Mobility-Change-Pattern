@@ -227,12 +227,25 @@ class ImprovedDualYearDataset(Dataset):
         """
         grid_id = self.grid_ids[idx]
 
-        # Get change features (7, 4)
+        # Get change features (7, 4) or (7, 8) with ellipse features
         features = self.change_features[grid_id]
 
         # Split into 2021 and 2024 features
-        x_2021 = features[:, [0, 2]]  # (7, 2) - [total_log, net_flow_log]
-        x_2024 = features[:, [1, 3]]  # (7, 2) - [total_log, net_flow_log]
+        if features.shape[1] == 8:
+            # With ellipse features: (7, 8)
+            # Temporal: flow features
+            x_2021 = features[:, [0, 2]]  # (7, 2) - [total_log, net_flow_log]
+            x_2024 = features[:, [1, 3]]  # (7, 2) - [total_log, net_flow_log]
+
+            # Spatial: ellipse features
+            spatial_2021 = features[:, [4, 5]]  # (7, 2) - [eccentricity, log_area]
+            spatial_2024 = features[:, [6, 7]]  # (7, 2) - [eccentricity, log_area]
+        else:
+            # Only flow features: (7, 4)
+            x_2021 = features[:, [0, 2]]  # (7, 2) - [total_log, net_flow_log]
+            x_2024 = features[:, [1, 3]]  # (7, 2) - [total_log, net_flow_log]
+            spatial_2021 = features[:, [0, 2]]  # Fallback to flow features
+            spatial_2024 = features[:, [1, 3]]
 
         # Get label
         label = self.labels[grid_id]
@@ -240,6 +253,8 @@ class ImprovedDualYearDataset(Dataset):
         return {
             'x_2021': torch.FloatTensor(x_2021),
             'x_2024': torch.FloatTensor(x_2024),
+            'spatial_2021': torch.FloatTensor(spatial_2021),
+            'spatial_2024': torch.FloatTensor(spatial_2024),
             'label': torch.LongTensor([label])[0],
             'grid_id': grid_id
         }
@@ -275,8 +290,20 @@ class ImprovedGraphBatchCollator:
         ]
 
         self.grid_id_to_idx = grid_id_to_idx
-        self.all_features_2021 = torch.FloatTensor(all_features_2021)
-        self.all_features_2024 = torch.FloatTensor(all_features_2024)
+
+        # Separate temporal and spatial features
+        if all_features_2021.shape[2] == 8:
+            # With ellipse features
+            self.all_features_2021_temporal = torch.FloatTensor(all_features_2021[:, :, [0, 2]])  # (N, 7, 2)
+            self.all_features_2021_spatial = torch.FloatTensor(all_features_2021[:, :, [4, 5]])   # (N, 7, 2)
+            self.all_features_2024_temporal = torch.FloatTensor(all_features_2024[:, :, [1, 3]])  # (N, 7, 2)
+            self.all_features_2024_spatial = torch.FloatTensor(all_features_2024[:, :, [6, 7]])   # (N, 7, 2)
+        else:
+            # Only flow features
+            self.all_features_2021_temporal = torch.FloatTensor(all_features_2021[:, :, [0, 2]])
+            self.all_features_2021_spatial = torch.FloatTensor(all_features_2021[:, :, [0, 2]])
+            self.all_features_2024_temporal = torch.FloatTensor(all_features_2024[:, :, [1, 3]])
+            self.all_features_2024_spatial = torch.FloatTensor(all_features_2024[:, :, [1, 3]])
 
     def __call__(self, batch):
         """
@@ -290,6 +317,8 @@ class ImprovedGraphBatchCollator:
         """
         x_2021_batch = torch.stack([item['x_2021'] for item in batch])
         x_2024_batch = torch.stack([item['x_2024'] for item in batch])
+        spatial_2021_batch = torch.stack([item['spatial_2021'] for item in batch])
+        spatial_2024_batch = torch.stack([item['spatial_2024'] for item in batch])
         label_batch = torch.stack([item['label'] for item in batch])
         grid_ids = [item['grid_id'] for item in batch]
 
@@ -301,13 +330,17 @@ class ImprovedGraphBatchCollator:
         # NOTE: Graphs stay on CPU here, will be moved to device in train loop
 
         return {
-            'x_2021': x_2021_batch,  # (batch_size, 7, 2)
-            'x_2024': x_2024_batch,  # (batch_size, 7, 2)
+            'x_2021': x_2021_batch,  # (batch_size, 7, 2) - temporal features
+            'x_2024': x_2024_batch,  # (batch_size, 7, 2) - temporal features
+            'spatial_2021': spatial_2021_batch,  # (batch_size, 7, 2) - spatial features
+            'spatial_2024': spatial_2024_batch,  # (batch_size, 7, 2) - spatial features
             'labels': label_batch,
             'grid_ids': grid_ids,
             'node_indices': node_indices,
             'graphs_2021': self.graphs_2021,  # List of 7 graphs (on CPU)
             'graphs_2024': self.graphs_2024,  # List of 7 graphs (on CPU)
-            'all_features_2021': self.all_features_2021,  # (num_nodes, 7, 2)
-            'all_features_2024': self.all_features_2024   # (num_nodes, 7, 2)
+            'all_features_2021_temporal': self.all_features_2021_temporal,  # (num_nodes, 7, 2)
+            'all_features_2021_spatial': self.all_features_2021_spatial,    # (num_nodes, 7, 2)
+            'all_features_2024_temporal': self.all_features_2024_temporal,  # (num_nodes, 7, 2)
+            'all_features_2024_spatial': self.all_features_2024_spatial     # (num_nodes, 7, 2)
         }

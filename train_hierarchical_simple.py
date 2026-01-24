@@ -78,25 +78,38 @@ def train_epoch_hierarchical(model, train_loader, criterion_intensity, criterion
     direct_correct = 0
     total_samples = 0
 
+    # Gradient accumulation settings
+    accumulation_steps = 4
+
     for batch_idx, batch in enumerate(train_loader):
-        # 移动到设备
-        x_2021 = batch['all_features_2021'].to(device)
-        x_2024 = batch['all_features_2024'].to(device)
+        # Get batch-level features for temporal branch
+        x_2021_batch = batch['x_2021'].to(device)  # (batch_size, 7, 2)
+        x_2024_batch = batch['x_2024'].to(device)  # (batch_size, 7, 2)
         labels = batch['labels'].to(device)
         node_indices = batch['node_indices'].to(device)
 
-        # 移动图数据到设备
+        # Get full graph features for spatial branch
+        x_2021_full = batch['all_features_2021_temporal'].to(device)  # (num_nodes, 7, 2)
+        x_2024_full = batch['all_features_2024_temporal'].to(device)  # (num_nodes, 7, 2)
+
+        # Get graphs from model (already stored)
+        graphs_2021 = model.graphs_2021
+        graphs_2024 = model.graphs_2024
+
+        # Move graphs to device
         graphs_2021 = [(edge_index.to(device), edge_attr.to(device))
-                       for edge_index, edge_attr in batch['graphs_2021']]
+                       for edge_index, edge_attr in graphs_2021]
         graphs_2024 = [(edge_index.to(device), edge_attr.to(device))
-                       for edge_index, edge_attr in batch['graphs_2024']]
+                       for edge_index, edge_attr in graphs_2024]
 
         # 转换标签
         intensity_labels, direction_labels = convert_labels_to_hierarchical(labels)
 
-        # 前向传播 (返回三个输出)
+        # 前向传播 - temporal uses batch features, spatial uses full graph
+        # We need to modify the model forward to accept both
+        # For now, use a workaround: pass full features and node_indices
         intensity_logits, direction_logits, direct_logits = model(
-            x_2021, x_2024, graphs_2021, graphs_2024, node_indices
+            x_2021_full, x_2024_full, graphs_2021, graphs_2024, node_indices=node_indices
         )
 
         # 计算三个损失
@@ -105,16 +118,19 @@ def train_epoch_hierarchical(model, train_loader, criterion_intensity, criterion
         loss_direct = criterion_direct(direct_logits, labels)
 
         # 组合损失 (可以调整权重)
-        loss = loss_intensity + loss_direction + 0.5 * loss_direct
+        loss = (loss_intensity + loss_direction + 0.5 * loss_direct) / accumulation_steps
 
-        # 反向传播
-        optimizer.zero_grad()
+        # 反向传播 (accumulate gradients)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
 
-        # 统计
-        total_loss += loss.item()
+        # 只在累积步数达到时更新参数
+        if (batch_idx + 1) % accumulation_steps == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            optimizer.zero_grad()
+
+        # 统计 (注意loss已经除以accumulation_steps)
+        total_loss += loss.item() * accumulation_steps
         total_intensity_loss += loss_intensity.item()
         total_direction_loss += loss_direction.item()
         total_direct_loss += loss_direct.item()
@@ -177,20 +193,28 @@ def validate_hierarchical(model, val_loader, device):
 
     with torch.no_grad():
         for batch in val_loader:
-            x_2021 = batch['all_features_2021'].to(device)
-            x_2024 = batch['all_features_2024'].to(device)
+            x_2021_batch = batch['x_2021'].to(device)  # (batch_size, 7, 2)
+            x_2024_batch = batch['x_2024'].to(device)  # (batch_size, 7, 2)
             labels = batch['labels'].to(device)
             node_indices = batch['node_indices'].to(device)
 
-            # 移动图数据到设备
-            graphs_2021 = [(edge_index.to(device), edge_attr.to(device))
-                           for edge_index, edge_attr in batch['graphs_2021']]
-            graphs_2024 = [(edge_index.to(device), edge_attr.to(device))
-                           for edge_index, edge_attr in batch['graphs_2024']]
+            # Get full graph features for spatial branch
+            x_2021_full = batch['all_features_2021_temporal'].to(device)  # (num_nodes, 7, 2)
+            x_2024_full = batch['all_features_2024_temporal'].to(device)  # (num_nodes, 7, 2)
 
-            # 前向传播
+            # Get graphs from model (already stored)
+            graphs_2021 = model.graphs_2021
+            graphs_2024 = model.graphs_2024
+
+            # Move graphs to device
+            graphs_2021 = [(edge_index.to(device), edge_attr.to(device))
+                           for edge_index, edge_attr in graphs_2021]
+            graphs_2024 = [(edge_index.to(device), edge_attr.to(device))
+                           for edge_index, edge_attr in graphs_2024]
+
+            # 前向传播 (use full graph features with node_indices)
             intensity_logits, direction_logits, direct_logits = model(
-                x_2021, x_2024, graphs_2021, graphs_2024, node_indices
+                x_2021_full, x_2024_full, graphs_2021, graphs_2024, node_indices=node_indices
             )
 
             # 预测
@@ -271,13 +295,14 @@ def main():
     logger.info("Step 1: Loading data")
     logger.info("=" * 80)
 
-    # 直接加载指定的缓存
-    import pickle
-    cache_path = 'data/cache/dual_year_data_baf354d54dee.pkl'
-    logger.info(f"Loading cache from: {cache_path}")
+    # Load data using prepare_dual_year_experiment_data (with cache support)
+    from src.preprocessing.dual_year_processor import prepare_dual_year_experiment_data
 
-    with open(cache_path, 'rb') as f:
-        data = pickle.load(f)
+    data = prepare_dual_year_experiment_data(
+        label_path='data/labels.csv',
+        samples_per_class=None,  # Use all samples
+        use_cache=True
+    )
 
     logger.info(f"✓ Loaded {len(data['labels'])} labeled grids from cache")
 
@@ -323,16 +348,40 @@ def main():
     all_features_2021 = []
     all_features_2024 = []
 
+    # First, check the feature dimension from the first grid
+    first_grid_id = next(iter(data['grid_id_to_idx'].keys()))
+    if first_grid_id in data['change_features']:
+        feature_dim = data['change_features'][first_grid_id].shape[1]  # 4 or 8
+        logger.info(f"Feature dimension detected: (7, {feature_dim})")
+    else:
+        feature_dim = 4  # Default to flow features only
+        logger.warning("Could not detect feature dimension, using default (7, 4)")
+
     for grid_id in data['grid_id_to_idx'].keys():
         if grid_id in data['change_features']:
-            features = data['change_features'][grid_id]
-            x_2021 = features[:, [0, 2]]
-            x_2024 = features[:, [1, 3]]
-            all_features_2021.append(x_2021)
-            all_features_2024.append(x_2024)
+            features = data['change_features'][grid_id]  # (7, 4) or (7, 8)
 
-    all_features_2021 = np.stack(all_features_2021)
-    all_features_2024 = np.stack(all_features_2024)
+            # Ensure consistent feature dimension
+            if features.shape[1] == feature_dim:
+                all_features_2021.append(features)
+                all_features_2024.append(features)
+            else:
+                # Pad or truncate to match expected dimension
+                if features.shape[1] < feature_dim:
+                    # Pad with zeros (missing ellipse features)
+                    padded = np.zeros((7, feature_dim))
+                    padded[:, :features.shape[1]] = features
+                    all_features_2021.append(padded)
+                    all_features_2024.append(padded)
+                else:
+                    # Truncate (shouldn't happen, but handle it)
+                    all_features_2021.append(features[:, :feature_dim])
+                    all_features_2024.append(features[:, :feature_dim])
+
+    all_features_2021 = np.stack(all_features_2021)  # (N, 7, 4 or 8)
+    all_features_2024 = np.stack(all_features_2024)  # (N, 7, 4 or 8)
+
+    logger.info(f"Prepared all_features with shape: {all_features_2021.shape}")
 
     # 创建collator
     collator = ImprovedGraphBatchCollator(
@@ -360,7 +409,26 @@ def main():
         spatial_input_size=config.SPATIAL_INPUT_SIZE,
         num_time_steps=config.TIME_STEPS,
         use_hierarchical=True  # 使用层次化分类
-    ).to(device)
+    )
+
+    # Store graphs in model (for easy access)
+    # Convert numpy arrays to tensors
+    model.graphs_2021 = [
+        (torch.LongTensor(edge_index), torch.FloatTensor(edge_attr))
+        for edge_index, edge_attr in data['graphs_2021']
+    ]
+    model.graphs_2024 = [
+        (torch.LongTensor(edge_index), torch.FloatTensor(edge_attr))
+        for edge_index, edge_attr in data['graphs_2024']
+    ]
+    logger.info("✓ Stored graph data in model (converted to tensors)")
+
+    # Single GPU with gradient accumulation (avoid OOM and DataParallel issues)
+    logger.info("Using single GPU with gradient accumulation")
+    logger.info(f"Physical batch size: {config.BATCH_SIZE}, Accumulation steps: 4")
+    logger.info(f"Effective batch size: {config.BATCH_SIZE * 4}")
+
+    model = model.to(device)
 
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"✓ Model initialized with {num_params:,} parameters")
@@ -445,6 +513,7 @@ def main():
             best_direct_acc = val_metrics['direct_acc']
             patience_counter = 0
 
+            # Save model state dict (single GPU, no DataParallel)
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -473,7 +542,7 @@ def main():
     logger.info("Step 5: Testing")
     logger.info("=" * 80)
 
-    # 加载最佳模型
+    # 加载最佳模型 (single GPU, no DataParallel)
     checkpoint = torch.load(f"{output_dir}/models/best_model.pth")
     model.load_state_dict(checkpoint['model_state_dict'])
     logger.info(f"✓ Loaded best model from epoch {checkpoint['epoch']}")

@@ -5,6 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Repository Overview
 
 This is a deep learning project for mobility pattern classification in the Pearl River Delta (PRD) region of China. It implements a dual-branch spatiotemporal model combining LSTM-SPP (temporal) and DySAT (spatial) networks with attention-based fusion to classify 9 types of mobility change patterns.
+研究构建了人群流动模式变化检测（Human Mobility Pattern Change Detection, HMP-CD）的概念与方法框架。该框架实现了从原始移动数据到模式变化类型识别的端到端检测
+【概念框架图】HMP-CD框架包含：
+（1）变化检测定义
+【变化检测定义层】该层构建了人群流动模式变化的定义。对于两个时期（T1和T2）的移动数据，分别提取流动连接强度（Flow Intensity）和空间方向分布（Spatial Distribution）两个维度，形成各时期的"时空稳态快照"作为两种基线状态（Baseline State），作为人群流动模式的定义。在此基础上，基于流动强度趋势（增长/稳定/衰减）与空间组织方向（聚集/均衡/扩散）的组合，构建3×3模式变化分类体系（Change Type），将模式变化系统性地划分为A-I共九种类型。
+（2）时空深度学习方法
+【时空深度学习方法层】该层实现了从时空数据到模式变化类型的智能识别。方法包含两个并行的分支：时间序列分支：采用LSTM网络（LSTM-net）和空间金字塔池化网络（SPP-net）分别处理T1和T2时期的时序输入，学习每个空间单元在时间维度上的模式演化趋势，捕捉长期依赖关系并识别关键转变节点。动态图分支：基于T1和T2时期进行动态图构建，采用动态自注意力网络（DySAT-net）建模空间单元间的依赖关系与传播机制，识别变化的空间分异规律与扩散路径。两个通道提取的时空特征经过特征融合（Feature Fusion）后，输入流动模式变化检测模块（Mobility Pattern Change Detection），端到端输出九类模式变化类型。
 
 ## Project Structure
 
