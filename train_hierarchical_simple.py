@@ -411,17 +411,18 @@ def main():
         use_hierarchical=True  # 使用层次化分类
     )
 
-    # Store graphs in model (for easy access)
+
+    # Store static graphs in model (1 graph per year)
     # Convert numpy arrays to tensors
     model.graphs_2021 = [
-        (torch.LongTensor(edge_index), torch.FloatTensor(edge_attr))
-        for edge_index, edge_attr in data['graphs_2021']
+        (torch.LongTensor(data['graphs_2021'][0][0]),
+         torch.FloatTensor(data['graphs_2021'][0][1]))
     ]
     model.graphs_2024 = [
-        (torch.LongTensor(edge_index), torch.FloatTensor(edge_attr))
-        for edge_index, edge_attr in data['graphs_2024']
+        (torch.LongTensor(data['graphs_2024'][0][0]),
+         torch.FloatTensor(data['graphs_2024'][0][1]))
     ]
-    logger.info("✓ Stored graph data in model (converted to tensors)")
+    logger.info("✓ Stored static graph data in model (converted to tensors)")
 
     # Single GPU with gradient accumulation (avoid OOM and DataParallel issues)
     logger.info("Using single GPU with gradient accumulation")

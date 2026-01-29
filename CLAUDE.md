@@ -2,546 +2,635 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Repository Overview
+---
 
-This is a deep learning project for mobility pattern classification in the Pearl River Delta (PRD) region of China. It implements a dual-branch spatiotemporal model combining LSTM-SPP (temporal) and DySAT (spatial) networks with attention-based fusion to classify 9 types of mobility change patterns.
-研究构建了人群流动模式变化检测（Human Mobility Pattern Change Detection, HMP-CD）的概念与方法框架。该框架实现了从原始移动数据到模式变化类型识别的端到端检测
-【概念框架图】HMP-CD框架包含：
-（1）变化检测定义
-【变化检测定义层】该层构建了人群流动模式变化的定义。对于两个时期（T1和T2）的移动数据，分别提取流动连接强度（Flow Intensity）和空间方向分布（Spatial Distribution）两个维度，形成各时期的"时空稳态快照"作为两种基线状态（Baseline State），作为人群流动模式的定义。在此基础上，基于流动强度趋势（增长/稳定/衰减）与空间组织方向（聚集/均衡/扩散）的组合，构建3×3模式变化分类体系（Change Type），将模式变化系统性地划分为A-I共九种类型。
-（2）时空深度学习方法
-【时空深度学习方法层】该层实现了从时空数据到模式变化类型的智能识别。方法包含两个并行的分支：时间序列分支：采用LSTM网络（LSTM-net）和空间金字塔池化网络（SPP-net）分别处理T1和T2时期的时序输入，学习每个空间单元在时间维度上的模式演化趋势，捕捉长期依赖关系并识别关键转变节点。动态图分支：基于T1和T2时期进行动态图构建，采用动态自注意力网络（DySAT-net）建模空间单元间的依赖关系与传播机制，识别变化的空间分异规律与扩散路径。两个通道提取的时空特征经过特征融合（Feature Fusion）后，输入流动模式变化检测模块（Mobility Pattern Change Detection），端到端输出九类模式变化类型。
+## Project Overview
 
-## Project Structure
+This project implements a **hierarchical dual-branch spatiotemporal deep learning model** for classifying mobility pattern changes in the Pearl River Delta (PRD) region between 2021 and 2024. The model uses a 3×3 classification framework to identify 9 distinct mobility change patterns.
 
-```
-mobility_analysis/
-├── config.py                    # Configuration parameters
-├── train.py                     # Main training script (original)
-├── train_improved.py            # Improved training script (dual-year)
-├── preprocess_data.py           # Standalone preprocessing script
-├── test_cache_key.py            # Cache key generation test script
-├── ablation_study.py            # Ablation experiments
-├── requirements.txt             # Python dependencies
-├── data/                        # Data directory
-│   ├── 2021.csv                # OD flow data 2021 (~12.7 GB)
-│   ├── 2024.csv                # OD flow data 2024 (~12.9 GB)
-│   ├── labels_1w.csv           # Grid labels (9 classes, 10K samples)
-│   ├── cache/                  # Preprocessed data cache
-│   │   ├── dual_year_data_{hash}.pkl      # Cached preprocessed data
-│   │   └── dual_year_data_{hash}_info.txt # Cache metadata
-│   └── grid_metadata/
-│       └── PRD_grid_metadata.csv
-├── src/
-│   ├── preprocessing/
-│   │   ├── data_processor.py       # Data loading and preprocessing
-│   │   ├── dual_year_processor.py  # Dual-year data processor (with cache v3)
-│   │   └── graph_builder.py        # Spatial graph construction
-│   ├── models/
-│   │   ├── temporal_branch.py      # LSTM + SPP network
-│   │   ├── spatial_branch.py       # DySAT network
-│   │   └── dual_branch_model.py    # Complete model + baselines
-│   ├── training/
-│   │   ├── dataset.py              # PyTorch dataset
-│   │   └── trainer.py              # Training pipeline
-│   ├── evaluation/
-│   │   └── evaluator.py            # Evaluation metrics
-│   └── visualization/
-│       └── visualizer.py           # Spatial/temporal visualization
-├── outputs/                         # Training outputs
-│   ├── models/                     # Saved models
-│   ├── logs/                       # TensorBoard logs
-│   └── figures/                    # Generated visualizations
-├── checkpoints/                     # Model checkpoints
-├── CACHE_IMPROVEMENT_SUMMARY.md     # Cache system documentation
-├── CACHE_BEHAVIOR_EXPLANATION.md    # Cache behavior guide
-└── CLAUDE.md                        # This file
-```
+**Research Problem**: Classify how urban mobility patterns have changed by analyzing Origin-Destination (OD) flow data across two dimensions:
+- **Flow Intensity**: Stable / Growth / Decline (3 classes)
+- **Spatial Direction**: Balanced / Aggregation / Diffusion (3 classes)
+- **Combined**: 9 classes (3 × 3 hierarchical structure)
 
-## Data Structure
+---
 
-### Mobility Data Files
-- `data/2021.csv` - Mobility data from 2021 (~12.7 GB)
-- `data/2024.csv` - Mobility data from 2024 (~12.9 GB)
+## Quick Start Commands
 
-**Schema:**
-- `date_dt` - Date in YYYYMMDD format
-- `time` - Hour of day (0-23)
-- `o_grid_500` - Origin grid ID (500m grid cell)
-- `d_grid_500` - Destination grid ID (500m grid cell)
-- `num_total` - Total number of trips between origin and destination
-
-### Grid Metadata
-- `data/grid_metadata/PRD_grid_metadata.csv` - Spatial reference for grid cells (~13 MB)
-
-**Schema:**
-- `OBJECTID` - Unique object identifier
-- `area_name` - District/area name (Chinese)
-- `city_name` - City name (Chinese)
-- `grid_id` - Grid cell identifier
-- `lon` - Longitude (WGS84)
-- `lat` - Latitude (WGS84)
-
-### Labels
-- `data/labels_1w_20251228.csv` - Labeled grid cells with 9-class classifications
-
-**Schema:**
-- `grid_id` - Grid cell identifier
-- `lon` - Longitude
-- `lat` - Latitude
-- `label` - Classification label (1-9, converted to 0-8 internally)
-- `remark` - Additional notes (optional)
-
-## Model Architecture
-
-### Dual-Branch Structure
-
-The model uses two parallel branches that process different aspects of mobility data:
-
-1. **Temporal Branch (LSTM-SPP)**
-   - 2-layer bidirectional LSTM (128 hidden units each)
-   - Spatial Pyramid Pooling with 3 levels (1×1, 2×2, 4×4)
-   - Processes time series of inflow/outflow (168 hours × 2 features)
-   - Captures temporal dynamics and multi-scale patterns
-
-2. **Spatial Branch (DySAT)**
-   - 3-layer Dynamic Self-Attention Network
-   - Graph Attention with 4 heads per layer
-   - K-nearest neighbor graph (k=8) + flow-based edges
-   - Captures spatial relationships and geographic dependencies
-
-3. **Attention Fusion**
-   - Multi-head attention (4 heads) to combine temporal and spatial features
-   - Learns adaptive weighting between branches
-   - 256-dimensional fused representation
-
-4. **Classification Head**
-   - 2-layer MLP with ReLU activation
-   - Outputs 9-class predictions
-
-### Baseline Models
-
-- **LSTM**: Temporal-only baseline (2-layer LSTM)
-- **GAT**: Spatial-only baseline (2-layer Graph Attention Network)
-
-## Commands
-
-### Setup Environment
-
+### Installation
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Create necessary directories (automatically created by scripts)
-mkdir -p outputs/models outputs/logs outputs/figures checkpoints data/cache
-```
-
-### Data Preprocessing (Recommended Workflow)
-
-```bash
-# Preprocess data with caching (recommended for dual-year experiments)
-python3 preprocess_data.py --label-path data/labels_1w.csv
-
-# With custom cache directory
-python3 preprocess_data.py --label-path data/labels_1w.csv --cache-dir data/cache
-
-# Force regenerate cache (bypass existing cache)
-python3 preprocess_data.py --label-path data/labels_1w.csv --force-regenerate
-
-# With sampling (for testing)
-python3 preprocess_data.py --label-path data/labels_1w.csv --samples-per-class 100
-
-# Test cache key generation
-python3 test_cache_key.py
 ```
 
 ### Training
-
 ```bash
-# Dual-year training (improved model, uses preprocessed cache)
-python3 train_improved.py
+# Main training script (hierarchical model)
+python train_hierarchical_simple.py
 
-# Original single-year training
-python3 train.py
-
-# For testing with smaller dataset (faster)
-# Edit train.py line: data = prepare_data(year=2021, sample_size=1000000)
-```
-
-### Cache Management
-
-```bash
-# View cache files
-ls -lht data/cache/
-
-# View cache information
-cat data/cache/dual_year_data_*_info.txt
-
-# Clean old caches (keep only latest)
-ls -t data/cache/dual_year_data_*.pkl | tail -n +2 | xargs rm -f
-ls -t data/cache/dual_year_data_*_info.txt | tail -n +2 | xargs rm -f
-
-# Clean caches older than 7 days
-find data/cache/ -name "dual_year_data_*.pkl" -mtime +7 -delete
-
-# Remove all caches
-rm data/cache/dual_year_data_*.*
-```
-
-### Ablation Study
-
-```bash
-# Run ablation experiments (without SPP, without DySAT)
-python ablation_study.py
-```
-
-### Monitoring Training
-
-```bash
-# Launch TensorBoard
+# Monitor training with TensorBoard
 tensorboard --logdir outputs/logs
-
-# View at http://localhost:6006
 ```
 
-### Testing Individual Components
-
+### Testing & Evaluation
 ```bash
-# Test data preprocessing
-python src/preprocessing/data_processor.py
-
-# Test dual-year preprocessing
-python src/preprocessing/dual_year_processor.py
-
-# Test temporal branch
-python src/models/temporal_branch.py
-
-# Test spatial branch
-python src/models/spatial_branch.py
-
-# Test complete model
-python src/models/dual_branch_model.py
+# The training script automatically evaluates on test set after training
+# Results saved to: outputs/test_results_hierarchical.json
 ```
 
-## Key Configuration Parameters
+### Data Preprocessing
+```bash
+# Data is automatically preprocessed and cached on first run
+# Cache location: data/cache/dual_year_data_{hash}.pkl
+# To force reprocessing, delete the cache file
+```
 
-All parameters are defined in `config.py`:
+---
 
-### Data Parameters
-- `TRAIN_DAYS = 7` - Use first 7 days (168 hours) for training
-- `NUM_CLASSES = 9` - 9 mobility pattern classes
-- `LABEL_RANGE = (1, 9)` - Label values in data
+## Architecture Overview
 
-### Model Architecture
-- `LSTM_LAYERS = 2`, `LSTM_HIDDEN_SIZE = 128`
-- `SPP_LEVELS = [1, 2, 4]` - Pyramid pooling levels
-- `DYSAT_LAYERS = 3`, `DYSAT_HIDDEN_SIZE = 128`, `DYSAT_HEADS = 4`
-- `TIME_WINDOW = 24` - 24-hour sliding window for dynamic graphs
+### Model Structure
 
-### Training
-- `BATCH_SIZE = 32`
-- `LEARNING_RATE = 0.001`
-- `NUM_EPOCHS = 100`
-- `EARLY_STOPPING_PATIENCE = 15`
+```
+ImprovedDualBranchModel
+├── Temporal Branch (ParallelTemporalBranch)
+│   ├── LSTM Branch: Captures long-term temporal dependencies
+│   │   └── 2-layer LSTM (128 hidden units) → 256-dim embeddings
+│   └── SPP Branch: Multi-scale pattern extraction
+│       └── Spatial Pyramid Pooling [1×1, 2×2, 4×4] → 256-dim embeddings
+│   Output: 6 features (2021, 2024, diff) × 2 branches
+│
+├── Spatial Branch (SimplifiedDualYearGAT)
+│   └── 3-layer GAT (4 attention heads per layer)
+│       ├── Processes each of 7 days separately
+│       ├── Temporal aggregation (average across days)
+│       └── Output: 3 features (2021, 2024, diff)
+│
+├── Fusion Layer (MultiFeatureAttentionFusion)
+│   └── Multi-head self-attention (4 heads) over 9 features
+│       └── Output: 256-dim fused representation
+│
+└── Classification Heads (3 parallel heads)
+    ├── Intensity Classifier: 3 classes (Stable/Growth/Decline)
+    ├── Direction Classifier: 3 classes (Balanced/Aggregation/Diffusion)
+    └── Direct Classifier: 9 classes (for comparison)
+```
+
+---
 
 ## Data Processing Pipeline
 
-### 1. Data Loading
-- OD flow data loaded in chunks (100K rows) due to large size
-- Date/time validation and conversion
-- Grid ID consistency checking with metadata
+### Input Data Format
 
-### 2. Preprocessing
-- Filter to first 7 days (168 hours) for training
-- Z-score normalization of flow volumes
-- Temporal feature engineering (hour, day_of_week, is_weekend)
+**Raw OD Flow Data** (`data/2021.csv`, `data/2024.csv`):
+- Size: ~12GB each
+- Columns: `o_grid_500`, `d_grid_500`, `date_dt`, `time`, `num_total`
+- Time period: First 7 days of each year (168 hours)
 
-### 3. Feature Aggregation
-- Aggregate inflow/outflow for each grid cell over time
-- Create temporal sequences: (168 hours, 2 features)
-- Create spatial features: flattened temporal data (336 features)
+**Labels** (`data/labels.csv`):
+- Grid ID → Class label (1-9)
+- ~1,000+ labeled grids
 
-### 4. Graph Construction
-- **Spatial graph**: K-nearest neighbors (k=8) based on geographic distance
-- **Flow graph**: Edges based on OD flow volume (threshold-based)
-- **Hybrid graph**: Weighted combination of spatial + flow graphs
+**Grid Metadata** (`data/PRD_grid_metadata.csv`):
+- Grid coordinates for spatial graph construction
 
-### 5. Dataset Creation
-- Train/Val/Test split: 70%/10%/20%
-- Custom collator for batching with graph structure
-- Random seed (42) for reproducibility
+### Feature Engineering
 
-### 6. Cache Management (v3)
+**For each grid and each day, the system computes:**
 
-**Improved Cache Key Generation (2026-01-19):**
+1. **Inflow & Outflow Aggregation**
+   - Inflow: Sum of flows where grid is destination
+   - Outflow: Sum of flows where grid is origin
+   - Aggregated daily (not hourly)
 
-The preprocessing pipeline uses an intelligent caching system that automatically detects data changes:
+2. **Total Flow** (Flow Intensity Indicator)
+   ```python
+   total = inflow + outflow
+   total_log = log(1 + total)  # Log transform preserves magnitude
+   ```
 
-**Cache Key Components:**
-- Label file **content hash** (MD5): Detects any changes to label file content
-- OD data file **modification times**: Detects updates to 2021.csv and 2024.csv
-- `samples_per_class` parameter: Different sampling creates different caches
-- Version number (v3): Ensures compatibility with code updates
+3. **Net Flow** (Spatial Direction Indicator)
+   ```python
+   net_flow = outflow - inflow
+   net_flow_log = sign(net_flow) × log(1 + |net_flow|)  # Preserves sign
+   ```
 
-**Cache Invalidation (Automatic):**
-```bash
-# Cache automatically regenerates when:
-- Label file content changes (any modification to labels)
-- OD data files are updated (2021.csv or 2024.csv)
-- samples_per_class parameter changes
-- Code version upgrades
+4. **Final Feature Vector per Grid**: Shape (7, 4)
+   ```
+   [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]
+   ```
+   - 7 rows = 7 daily snapshots
+   - 4 columns = 2 years × 2 features
+
+### Caching Mechanism
+
+**Smart Cache System** (`src/preprocessing/dual_year_processor.py`):
+- Cache key: MD5 hash of label file + OD data modification times
+- Cache file: `data/cache/dual_year_data_{hash}.pkl`
+- First run: ~5-10 minutes (full preprocessing)
+- Subsequent runs: ~1 second (load from cache)
+- Auto-regenerates if data files change
+
+---
+
+## Spatial Graph Construction
+
+### Graph Type: Static Flow Graphs
+
+**Current Implementation**:
+- **One aggregated graph per year** (not dynamic per day)
+- Edges created when OD flow > threshold
+- Edge weights: Raw flow volume
+- Threshold: `FLOW_THRESHOLD = 10.0` (configurable in `config.py`)
+
+**Graph Statistics**:
+```
+2021 Flow Graph: ~10,956 edges
+2024 Flow Graph: ~10,956 edges
+Nodes: ~1,500 grids
 ```
 
-**Cache Behavior:**
-- **Same parameters**: Overwrites existing cache (same filename)
-- **Different parameters**: Creates new cache (different filename, old cache preserved)
-- **Location**: `data/cache/dual_year_data_{hash}.pkl`
-- **Size**: ~100-200 MB per cache file
+**Code Location**: `src/preprocessing/graph_builder.py`
 
-**Cache File Naming:**
+---
+
+## Data Flow Through Model
+
+### Step-by-Step Processing
+
+1. **Data Loading** (`train_hierarchical_simple.py:301-346`)
+   ```python
+   data = prepare_dual_year_experiment_data(
+       label_path='data/labels.csv',
+       use_cache=True
+   )
+   # Returns: change_features, labels, graphs_2021, graphs_2024, grid_id_to_idx
+   ```
+
+2. **Dataset Creation** (`src/training/dataset.py`)
+   ```python
+   dataset = ImprovedDualYearDataset(
+       change_features=data['change_features'],  # {grid_id: (7, 4)}
+       labels=data['labels']                     # {grid_id: 0-8}
+   )
+   # Each sample: x_2021 (7, 2), x_2024 (7, 2), label
+   ```
+
+3. **Batch Collation** (`src/training/dataset.py`)
+   ```python
+   collator = ImprovedGraphBatchCollator(
+       graphs_2021=data['graphs_2021'],
+       graphs_2024=data['graphs_2024'],
+       grid_id_to_idx=data['grid_id_to_idx'],
+       all_features_2021=all_features_2021,  # (N, 7, 4)
+       all_features_2024=all_features_2024
+   )
+   # Returns batch with node_indices for graph extraction
+   ```
+
+4. **Model Forward Pass** (`src/models/dual_branch_model.py:343-535`)
+   ```python
+   intensity_logits, direction_logits, direct_logits = model(
+       x_2021_full,      # (N, 7, 2) - full graph features
+       x_2024_full,      # (N, 7, 2)
+       graphs_2021,      # [(edge_index, edge_attr)]
+       graphs_2024,      # [(edge_index, edge_attr)]
+       node_indices      # (batch,) - indices to extract
+   )
+   ```
+
+### Temporal Branch Processing
+
+**Input**: `x_2021` (batch, 7, 2), `x_2024` (batch, 7, 2)
+
+**LSTM Component** (`src/models/temporal_branch.py:308-372`):
+```python
+# Shared LSTM processes both years
+_, (h_2021, _) = lstm(x_2021)  # (batch, 128)
+_, (h_2024, _) = lstm(x_2024)  # (batch, 128)
+diff_lstm = h_2024 - h_2021    # Captures change
+
+# Project to 256-dim
+h_2021 = projection(h_2021)    # (batch, 256)
+h_2024 = projection(h_2024)    # (batch, 256)
+diff_lstm = projection(diff_lstm)
 ```
-dual_year_data_ff8dc58099d9.pkl       # Cache file (12-char hash)
-dual_year_data_ff8dc58099d9_info.txt  # Cache metadata
+
+**SPP Component**:
+```python
+# Spatial Pyramid Pooling with levels [1, 2, 4]
+# Input: (batch, 2, 7) - features × time
+# Output: (batch, 14) - concatenated pooled features
+spp_out = spp(x)
+h_spp = projection(spp_out)  # (batch, 256)
 ```
 
-**Cache Info File Contents:**
-```
-Cache Information:
-  Label file: data/labels_1w.csv
-  Label file hash: 6e999bb1
-  Data 2021 mtime: 1749545823
-  Data 2024 mtime: 1749545691
-  Samples per class: ALL
-  Total grids: 10000
-  Class distribution: [...]
-```
+**Output**: Stack 6 features → (batch, 6, 256)
 
-**Manual Cache Management:**
-```bash
-# View cache files
-ls -lht data/cache/
+### Spatial Branch Processing
 
-# View cache information
-cat data/cache/dual_year_data_*_info.txt
+**Input**: `x_2021` (N, 7, 2), `x_2024` (N, 7, 2), static graphs
 
-# Clean old caches (manual)
-rm data/cache/dual_year_data_444c24a7.*
+**GAT Processing** (`src/models/spatial_branch.py:444-589`):
+```python
+for t in range(7):  # Process each day
+    x_t = x[:, t, :]  # (N, 2)
 
-# Clean all caches (use with caution)
-rm data/cache/dual_year_data_*.*
+    # Apply 3 GAT layers
+    for gat_layer in gat_layers:
+        h = gat_layer(h, edge_index, edge_attr)
+        h = elu(h) + dropout(h)
+    # h: (N, 512)
 
-# Clean caches older than 7 days
-find data/cache/ -name "dual_year_data_*.pkl" -mtime +7 -delete
+    daily_embeddings.append(h)
+
+# Temporal aggregation
+h_aggregated = mean(daily_embeddings, dim=0)  # (N, 512)
+h_out = output_proj(h_aggregated)  # (N, 256)
+
+# Extract batch nodes
+h_batch = h_out[node_indices]  # (batch, 256)
 ```
 
-**Typical Workflow:**
-```bash
-# 1. Modify labels
-vim data/labels_1w.csv
+**Output**: 3 features (2021, 2024, diff) → (batch, 3, 256)
 
-# 2. Run preprocessing (detects change, regenerates cache)
-python3 preprocess_data.py --label-path data/labels_1w.csv
-# Output: Cache file: data/cache/dual_year_data_ff8dc58099d9.pkl
+### Fusion & Classification
 
-# 3. Train model (uses new cache)
-python3 train_improved.py
+**Fusion** (`src/models/dual_branch_model.py`):
+```python
+# Concatenate 9 features (6 temporal + 3 spatial)
+all_features = concat([temporal_features, spatial_features])  # (batch, 9, 256)
 
-# 4. Clean old caches (optional)
-ls -lht data/cache/  # Check which caches exist
-rm data/cache/dual_year_data_444c24a7.*  # Remove old cache
+# Multi-head self-attention
+fused = fusion_layer(all_features)  # (batch, 256)
 ```
 
-**Cache Validation:**
-- Automatically validates cache integrity on load
-- Checks for required keys: labels, change_features, graphs_2021, graphs_2024, class_weights
-- Regenerates cache if validation fails
+**Classification Heads**:
+```python
+intensity_logits = intensity_classifier(fused)  # (batch, 3)
+direction_logits = direction_classifier(fused)  # (batch, 3)
+direct_logits = direct_classifier(fused)        # (batch, 9)
+```
 
-**Performance:**
-- Label file hash calculation: < 0.1 seconds
-- OD data mtime reading: < 0.01 seconds
-- Total overhead: Negligible
+---
 
-**Important Notes:**
-- Old cache files are NOT automatically deleted
-- Multiple caches can coexist (different parameters)
-- Cache directory: `data/cache/` (configurable via `--cache-dir`)
-- Use `--force-regenerate` to bypass cache and regenerate
+## Hierarchical Label System
 
-## Training Pipeline
+### Label Conversion
+
+**From 9-class to hierarchical** (`train_hierarchical_simple.py:34-61`):
+```python
+# Original label: 0-8 (representing classes 1-9)
+intensity_label = label // 3  # 0, 1, 2 (Stable, Growth, Decline)
+direction_label = label % 3   # 0, 1, 2 (Balanced, Aggregation, Diffusion)
+```
+
+**Example**:
+- Label 5 (Class 6) → intensity=1 (Growth), direction=2 (Diffusion)
+- Label 0 (Class 1) → intensity=0 (Stable), direction=0 (Balanced)
+
+**Combining predictions**:
+```python
+hierarchical_pred = intensity_pred * 3 + direction_pred
+```
+
+---
+
+## Training Configuration
+
+### Key Parameters (`config.py`)
+
+**Data Parameters**:
+```python
+TRAIN_DAYS = 7              # Use first 7 days
+TIME_STEPS = 7              # 7 daily snapshots
+TEMPORAL_INPUT_SIZE = 2     # [total_log, net_flow_log]
+SPATIAL_INPUT_SIZE = 2
+```
+
+**Model Architecture**:
+```python
+LSTM_LAYERS = 2
+LSTM_HIDDEN_SIZE = 128
+LSTM_DROPOUT = 0.2
+SPP_LEVELS = [1, 2, 4]
+
+GAT_LAYERS = 3
+GAT_HIDDEN_SIZE = 128
+GAT_HEADS = 4
+FUSION_HIDDEN_SIZE = 256
+ATTENTION_HEADS = 4
+```
+
+**Graph Configuration**:
+```python
+USE_STATIC_GRAPH = True      # Static aggregated graphs (not dynamic)
+USE_FLOW_ONLY_GRAPH = True   # Flow-based edges only
+FLOW_THRESHOLD = 10.0        # Minimum flow for edge creation
+```
+
+**Training Hyperparameters**:
+```python
+BATCH_SIZE = 16
+LEARNING_RATE = 0.001
+NUM_EPOCHS = 100
+EARLY_STOPPING_PATIENCE = 15
+WEIGHT_DECAY = 1e-5
+```
+
+**Data Split**:
+```python
+TRAIN_SPLIT = 0.7
+VAL_SPLIT = 0.1
+TEST_SPLIT = 0.2
+RANDOM_SEED = 42
+```
+
+### Loss Function
+
+**Three weighted cross-entropy losses** (`train_hierarchical_simple.py:438-473`):
+```python
+# Compute class weights for imbalanced data
+class_weights = total_samples / (num_classes * class_counts)
+
+# Three loss functions
+criterion_intensity = CrossEntropyLoss(weight=intensity_weights)
+criterion_direction = CrossEntropyLoss(weight=direction_weights)
+criterion_direct = CrossEntropyLoss(weight=original_weights)
+
+# Combined loss
+loss = (loss_intensity + loss_direction + 0.5 * loss_direct) / 4
+```
 
 ### Training Loop
-1. Forward pass through dual branches
-2. Attention-based fusion
-3. Classification with cross-entropy loss
-4. Gradient clipping (max_norm=1.0)
-5. Learning rate scheduling (ReduceLROnPlateau)
 
-### Logging
-- TensorBoard metrics: loss, accuracy, F1 (overall + per-class)
-- Model checkpoints: best model + periodic saves (every 10 epochs)
-- Confusion matrix saved at best validation accuracy
+**Gradient Accumulation** (`train_hierarchical_simple.py:64-180`):
+```python
+for batch_idx, batch in enumerate(train_loader):
+    # Forward pass
+    intensity_logits, direction_logits, direct_logits = model(...)
 
-### Early Stopping
-- Monitors validation accuracy
-- Patience: 15 epochs without improvement
+    # Compute losses
+    loss_intensity = criterion_intensity(intensity_logits, intensity_labels)
+    loss_direction = criterion_direction(direction_logits, direction_labels)
+    loss_direct = criterion_direct(direct_logits, labels)
+
+    # Combined loss
+    loss = (loss_intensity + loss_direction + 0.5 * loss_direct) / 4
+
+    # Gradient accumulation (effective batch size = 16 × 4 = 64)
+    loss.backward()
+    if (batch_idx + 1) % 4 == 0:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        optimizer.zero_grad()
+```
+
+---
 
 ## Evaluation Metrics
 
-### Primary Metrics
-- **Accuracy**: Overall classification accuracy
-- **F1 Score (Macro)**: Unweighted average across 9 classes
-- **F1 Score (Weighted)**: Weighted by class support
+### Four Types of Accuracy
 
-### Per-Class Metrics
-- F1 score for each of the 9 classes
-- Precision and recall (macro-averaged)
+1. **Intensity Accuracy**: Correct flow intensity predictions (3 classes)
+2. **Direction Accuracy**: Correct spatial direction predictions (3 classes)
+3. **Hierarchical Accuracy**: Combined intensity × direction (9 classes)
+4. **Direct Accuracy**: Direct 9-class predictions (baseline)
 
-### Outputs
-- Confusion matrix (9×9)
-- Classification report with per-class metrics
-- Model comparison plots (dual-branch vs baselines)
+### F1 Scores
 
-## Visualization Outputs
-
-All visualizations saved as JPG (300 DPI) in `outputs/figures/`:
-
-### Spatial Visualizations
-- `true_label_distribution.jpg` - Geographic distribution of true labels
-- `predicted_label_distribution.jpg` - Geographic distribution of predictions
-- Scatter plots with lon/lat coordinates, color-coded by class
-
-### Temporal Visualizations
-- `class_temporal_patterns.jpg` - Average temporal patterns for each class (3×3 grid)
-- `temporal_series_class_X.jpg` - Sample time series for each class
-- Shows inflow/outflow patterns over 168 hours with mean ± std
-
-### Evaluation Visualizations
-- `model_comparison.jpg` - Bar charts comparing all models
-- `{model}_confusion_matrix.jpg` - Confusion matrices
-- `{model}_f1_scores.jpg` - Per-class F1 score bar charts
-
-## Working with Large Data
-
-### Memory Management
-- OD files are 12+ GB each - always use chunked reading
-- Default chunk size: 100,000 rows
-- Filter data early (date range, valid grid IDs) to reduce memory
-- Use `sample_size` parameter in `prepare_data()` for testing
-
-### GPU Requirements
-- Model fits on GPUs with 8GB+ VRAM
-- Batch size can be reduced if OOM occurs
-- CPU training is supported but much slower
-
-### Data Sampling for Development
 ```python
-# In train.py, use sample_size for faster iteration
-data = prepare_data(year=2021, sample_size=1000000)  # 1M rows
+hierarchical_f1 = f1_score(labels, hierarchical_pred, average='macro')
+direct_f1 = f1_score(labels, direct_pred, average='macro')
 ```
 
-## Common Issues and Solutions
+### Output Format
 
-### Issue: Out of Memory
-- Reduce `BATCH_SIZE` in config.py
-- Use smaller `sample_size` in data loading
-- Reduce `LSTM_HIDDEN_SIZE` or `DYSAT_HIDDEN_SIZE`
-
-### Issue: Slow Training
-- Ensure CUDA is available: `torch.cuda.is_available()`
-- Reduce data size with `sample_size` parameter
-- Use fewer epochs or early stopping
-
-### Issue: Poor Performance
-- Check label distribution (may be imbalanced)
-- Verify data preprocessing (normalization, time filtering)
-- Try different learning rates or batch sizes
-- Run ablation study to identify weak components
-
-### Issue: Cache Not Updating After Label Changes
-**Symptom**: Modified labels but model still uses old data
-
-**Solution**: The improved cache system (v3) automatically detects label changes. If you're still seeing old data:
-```bash
-# 1. Verify you're using the new cache system
-python3 test_cache_key.py  # Should show label hash
-
-# 2. Force regenerate cache
-python3 preprocess_data.py --label-path data/labels_1w.csv --force-regenerate
-
-# 3. Clean old caches
-rm data/cache/dual_year_data_*.pkl
+**Training Progress**:
+```
+Epoch 10/100
+  Train Loss: 1.2345
+    - Intensity: 85.23%
+    - Direction: 78.45%
+    - Hierarchical (3×3): 72.34%
+    - Direct (9-class): 68.91%
+  Val Accuracy:
+    - Intensity: 82.10%
+    - Direction: 75.32%
+    - Hierarchical (3×3): 70.15% | F1: 0.6823
+    - Direct (9-class): 66.78% | F1: 0.6421
 ```
 
-### Issue: Too Many Cache Files
-**Symptom**: `data/cache/` directory has many old cache files
-
-**Solution**: Cache files accumulate when parameters change. Clean periodically:
-```bash
-# View all caches with timestamps
-ls -lht data/cache/
-
-# Keep only the latest cache
-ls -t data/cache/dual_year_data_*.pkl | tail -n +2 | xargs rm -f
-ls -t data/cache/dual_year_data_*_info.txt | tail -n +2 | xargs rm -f
-
-# Or clean caches older than 7 days
-find data/cache/ -name "dual_year_data_*.pkl" -mtime +7 -delete
-find data/cache/ -name "dual_year_data_*_info.txt" -mtime +7 -delete
+**Test Results** (`outputs/test_results_hierarchical.json`):
+```json
+{
+  "intensity_accuracy": 0.8210,
+  "direction_accuracy": 0.7532,
+  "hierarchical_accuracy": 0.7015,
+  "hierarchical_f1": 0.6823,
+  "direct_accuracy": 0.6678,
+  "direct_f1": 0.6421,
+  "confusion_matrix": [[...]]
+}
 ```
 
-### Issue: Disk Space Running Low
-**Symptom**: Each cache file is ~100-200 MB
+---
 
+## Key Implementation Details
+
+### Static vs Dynamic Graphs
+
+**Current Implementation: Static Graphs**
+- One aggregated graph per year (all 7 days combined)
+- Stored as: `graphs_2021 = [(edge_index, edge_attr)]`
+- Memory efficient, simpler computation
+
+**Alternative: Dynamic Graphs** (Not currently used)
+- One graph per day (7 graphs per year)
+- Would be: `graphs_2021 = [(edge_index_t, edge_attr_t) for t in range(7)]`
+- More expressive but higher memory cost
+
+### Batch Processing with Full Graph
+
+**Challenge**: GAT requires full graph, but we train on batches
+
+**Solution** (`src/training/dataset.py`):
+1. Pass full graph features to spatial branch: `(N, 7, 2)`
+2. Pass `node_indices` to extract batch nodes: `(batch,)`
+3. Spatial branch processes full graph, then extracts batch embeddings
+
+```python
+# In spatial branch
+h_full = gat_layers(x_full, edge_index, edge_attr)  # (N, 256)
+h_batch = h_full[node_indices]  # (batch, 256)
+```
+
+### Memory Optimization
+
+**Gradient Accumulation**:
+- Effective batch size: 16 × 4 = 64
+- Reduces memory usage while maintaining large batch benefits
+
+**Chunked Data Loading**:
+- OD data loaded in chunks (1M rows at a time)
+- Prevents OOM with 12GB+ CSV files
+
+**Caching**:
+- Preprocessed features cached to disk
+- Avoids reprocessing on every run
+
+---
+
+## File Structure & Key Locations
+
+### Entry Point
+- `train_hierarchical_simple.py` - Main training script
+
+### Data Processing
+- `src/preprocessing/dual_year_processor.py` - Data loading & feature engineering
+- `src/preprocessing/graph_builder.py` - Spatial graph construction
+- `src/preprocessing/data_processor.py` - Grid metadata processing
+
+### Model Architecture
+- `src/models/dual_branch_model.py` - Complete model (lines 343-535)
+- `src/models/temporal_branch.py` - LSTM + SPP (lines 308-372)
+- `src/models/spatial_branch.py` - GAT (lines 444-589)
+
+### Training & Evaluation
+- `src/training/dataset.py` - Dataset & collator classes
+- `src/training/trainer.py` - Training utilities
+- `src/evaluation/evaluator.py` - Evaluation metrics
+
+### Configuration
+- `config.py` - All configurable parameters
+
+---
+
+## Common Development Tasks
+
+### Modifying Model Architecture
+
+**To change LSTM hidden size**:
+1. Edit `config.py`: `LSTM_HIDDEN_SIZE = 256`
+2. Model automatically adapts
+
+**To add more GAT layers**:
+1. Edit `config.py`: `GAT_LAYERS = 4`
+2. Model automatically adapts
+
+**To change attention heads**:
+1. Edit `config.py`: `GAT_HEADS = 8` or `ATTENTION_HEADS = 8`
+
+### Adjusting Graph Construction
+
+**To change flow threshold**:
+1. Edit `config.py`: `FLOW_THRESHOLD = 20.0`
+2. Delete cache: `rm data/cache/*.pkl`
+3. Rerun training
+
+**To use dynamic graphs** (not recommended due to memory):
+1. Edit `config.py`: `USE_STATIC_GRAPH = False`
+2. Modify `graph_builder.py` to return list of graphs per day
+
+### Debugging Data Issues
+
+**Check preprocessed features**:
+```python
+import pickle
+with open('data/cache/dual_year_data_{hash}.pkl', 'rb') as f:
+    data = pickle.load(f)
+print(data['change_features'][grid_id])  # (7, 4)
+```
+
+**Verify graph structure**:
+```python
+edge_index, edge_attr = data['graphs_2021'][0]
+print(f"Edges: {edge_index.shape[1]}")
+print(f"Nodes: {edge_index.max() + 1}")
+```
+
+### Performance Tuning
+
+**If OOM occurs**:
+1. Reduce `BATCH_SIZE` in `config.py`
+2. Reduce `GAT_HIDDEN_SIZE` or `LSTM_HIDDEN_SIZE`
+3. Use CPU instead of GPU (slower but more memory)
+
+**If training is slow**:
+1. Increase `BATCH_SIZE` (if memory allows)
+2. Reduce `GAT_LAYERS` or `LSTM_LAYERS`
+3. Use smaller `FLOW_THRESHOLD` (fewer edges)
+
+---
+
+## Important Notes
+
+### Label Indexing
+- CSV labels: 1-9 (user-facing)
+- Internal labels: 0-8 (zero-indexed for PyTorch)
+- Conversion happens in `dual_year_processor.py`
+
+### Graph Storage
+- Graphs stored in model: `model.graphs_2021`, `model.graphs_2024`
+- Moved to device automatically during training
+- Static graphs shared across all batches
+
+### Feature Normalization
+- Log transformation applied to handle skewed flow distributions
+- Sign preserved for net flow (important for direction classification)
+- No additional normalization (log transform sufficient)
+
+### Reproducibility
+- Set `RANDOM_SEED = 42` in `config.py`
+- PyTorch, NumPy, and Python random seeds all set
+- Data split deterministic with fixed seed
+
+---
+
+## Architecture Rationale
+
+### Why Hierarchical Classification?
+- Decomposes complex 9-class problem into two simpler 3-class problems
+- Intensity and direction are conceptually independent dimensions
+- Improves interpretability and training stability
+
+### Why Dual-Branch Design?
+- Temporal patterns (LSTM+SPP) and spatial patterns (GAT) require different inductive biases
+- Separate branches allow specialized processing
+- Fusion layer learns optimal combination
+
+### Why Static Graphs?
+- Dynamic graphs (one per day) cause memory issues with large graphs
+- Static aggregated graphs capture overall spatial structure
+- Temporal information still captured by processing each day's features separately
+
+### Why Log Transformation?
+- Flow data highly skewed (few high-flow edges, many low-flow edges)
+- Log transform stabilizes variance and improves model training
+- Sign preservation for net flow maintains directional information
+
+---
+
+## Troubleshooting
+
+### Cache Issues
+**Problem**: Stale cache after data changes
+**Solution**: Delete `data/cache/*.pkl` and rerun
+
+### Graph Construction Errors
+**Problem**: "No edges created" warning
+**Solution**: Lower `FLOW_THRESHOLD` in `config.py`
+
+### OOM During Training
+**Problem**: CUDA out of memory
+**Solution**: Reduce `BATCH_SIZE`, `GAT_HIDDEN_SIZE`, or use CPU
+
+### Poor Performance
+**Problem**: Low accuracy on validation set
 **Solution**:
-```bash
-# Check cache directory size
-du -sh data/cache/
+- Check class imbalance (weights computed automatically)
+- Increase `NUM_EPOCHS` or reduce `EARLY_STOPPING_PATIENCE`
+- Verify data preprocessing (check cache file)
 
-# Remove all caches (will regenerate when needed)
-rm data/cache/dual_year_data_*.*
+---
 
-# Or keep only the most recent cache
-ls -t data/cache/dual_year_data_*.pkl | tail -n +2 | xargs rm -f
-```
-
-### Issue: Which Cache Is Being Used?
-**Symptom**: Multiple cache files exist, unsure which is active
-
-**Solution**:
-```bash
-# Method 1: Run preprocessing to see cache file name
-python3 preprocess_data.py --label-path data/labels_1w.csv
-# Output shows: Cache file: data/cache/dual_year_data_ff8dc58099d9.pkl
-
-# Method 2: Use test script
-python3 test_cache_key.py
-# Shows: Cache hash: ff8dc58099d9
-
-# Method 3: Check cache info files
-cat data/cache/dual_year_data_*_info.txt
-```
-
-## Coordinate System
-All coordinates are in WGS84 (EPSG:4326) decimal degrees.
-
-## Expected Outputs
-
-After running `train.py`, you should have:
-
-1. **Trained Models**
-   - `checkpoints/best_model.pth` - Best model checkpoint
-   - `checkpoints/confusion_matrix.npy` - Confusion matrix
-
-2. **Training Logs**
-   - `outputs/logs/run_YYYYMMDD_HHMMSS/` - TensorBoard logs
-
-3. **Evaluation Reports**
-   - `outputs/evaluation_reports/{model}_metrics.txt` - Text metrics
-   - `outputs/evaluation_reports/{model}_confusion_matrix.jpg`
-   - `outputs/evaluation_reports/{model}_f1_scores.jpg`
-
-4. **Visualizations**
-   - `outputs/figures/` - All spatial and temporal visualizations
-
-5. **Results Summary**
-   - `outputs/final_results.json` - JSON with all model metrics
+This documentation covers the complete architecture and data flow of the PRD mobility pattern classification system. The hierarchical dual-branch model combines temporal (LSTM+SPP) and spatial (GAT) processing to classify 9 types of mobility change patterns between 2021 and 2024.

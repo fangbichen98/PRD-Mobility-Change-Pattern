@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .temporal_branch import TemporalBranch, ParallelTemporalBranch
-from .spatial_branch import SpatialBranch, DualYearDySAT
+from .spatial_branch import SpatialBranch, DualYearDySAT, SimplifiedDualYearGAT
 import config
 
 
@@ -379,12 +379,22 @@ class ImprovedDualBranchModel(nn.Module):
             output_size=hidden_size
         )
 
-        # Dual-year spatial branch (DySAT)
-        self.spatial_branch = DualYearDySAT(
-            input_size=spatial_input_size,
-            num_time_steps=num_time_steps,
-            output_size=hidden_size
-        )
+        # Dual-year spatial branch (Simplified GAT for static flow-only graphs)
+        if config.SPATIAL_BRANCH_TYPE == 'gat':
+            self.spatial_branch = SimplifiedDualYearGAT(
+                input_size=spatial_input_size,
+                hidden_size=config.GAT_HIDDEN_SIZE,
+                num_layers=config.GAT_LAYERS,
+                heads=config.GAT_HEADS,
+                output_size=hidden_size
+            )
+        else:
+            # Fallback to DySAT for dynamic graphs
+            self.spatial_branch = DualYearDySAT(
+                input_size=spatial_input_size,
+                num_time_steps=num_time_steps,
+                output_size=hidden_size
+            )
 
         # Multi-feature attention fusion (9 features: 6 temporal + 3 spatial)
         self.fusion = MultiFeatureAttentionFusion(

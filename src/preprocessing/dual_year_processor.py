@@ -264,40 +264,12 @@ class DualYearDataProcessor:
             total_2021_log, net_flow_2021_log = self.log_transform_features(total_2021, net_flow_2021)
             total_2024_log, net_flow_2024_log = self.log_transform_features(total_2024, net_flow_2024)
 
-            # Extract ellipse features if available
-            if ellipse_data is not None:
-                ellipse_feats = compute_ellipse_features_dual_year(grid_id, ellipse_data)
-
-                if ellipse_feats is not None:
-                    grids_with_ellipse += 1
-                    # Ellipse features broadcast to 7 days: (4,) -> (7, 4)
-                    ellipse_array = np.array([
-                        ellipse_feats['eccentricity_2021'],
-                        ellipse_feats['log_area_2021'],
-                        ellipse_feats['eccentricity_2024'],
-                        ellipse_feats['log_area_2024'],
-                    ])  # (4,)
-                    ellipse_array_7d = np.tile(ellipse_array, (7, 1))  # (7, 4)
-
-                    # Concatenate: (7, 4) + (7, 4) = (7, 8)
-                    combined = np.concatenate([
-                        np.stack([total_2021_log, total_2024_log,
-                                 net_flow_2021_log, net_flow_2024_log], axis=1),  # (7, 4)
-                        ellipse_array_7d  # (7, 4)
-                    ], axis=1)
-                else:
-                    grids_without_ellipse += 1
-                    # If this grid has no ellipse data, use only flow features
-                    combined = np.stack([
-                        total_2021_log, total_2024_log,
-                        net_flow_2021_log, net_flow_2024_log
-                    ], axis=1)  # (7, 4)
-            else:
-                # No ellipse data provided, use only flow features
-                combined = np.stack([
-                    total_2021_log, total_2024_log,
-                    net_flow_2021_log, net_flow_2024_log
-                ], axis=1)  # (7, 4)
+            # Use only flow features (ellipse features removed for simplified model)
+            # Shape: (7, 4) = [total_2021_log, total_2024_log, net_2021_log, net_2024_log]
+            combined = np.stack([
+                total_2021_log, total_2024_log,
+                net_flow_2021_log, net_flow_2024_log
+            ], axis=1)  # (7, 4)
 
             change_features[grid_id] = combined
 
@@ -326,18 +298,9 @@ class DualYearDataProcessor:
         logger.info("Preparing Dual-Year Data (2021 vs 2024)")
         logger.info("=" * 80)
 
-        # Load ellipse data if available
+        # Skip ellipse features for simplified model (use flow features only)
         ellipse_data = None
-        ellipse_path = 'data/ellipses.json'
-        if os.path.exists(ellipse_path):
-            logger.info(f"Loading ellipse data from {ellipse_path}")
-            from .ellipse_features import load_ellipse_data
-            ellipse_data = load_ellipse_data(ellipse_path)
-            logger.info(f"✓ Loaded ellipse data for years: {list(ellipse_data['years'].keys())}")
-            logger.info(f"  - 2021: {len(ellipse_data['years']['2021'])} grids")
-            logger.info(f"  - 2024: {len(ellipse_data['years']['2024'])} grids")
-        else:
-            logger.warning(f"Ellipse data not found at {ellipse_path}, using flow features only")
+        logger.info("Using flow features only (ellipse features disabled for simplified model)")
 
         # Load 2021 data
         od_2021 = self.load_year_data(self.year1, sampled_grid_ids)
@@ -548,23 +511,34 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     metadata_sampled = metadata_df[metadata_df['grid_id'].isin(sampled_grid_ids)].copy()
     graph_builder = SpatialGraphBuilder(metadata_sampled, k_neighbors=8)
 
-    # Build dynamic graphs for both years (7 daily snapshots each)
-    dynamic_graph_builder = DynamicGraphBuilder(graph_builder, time_window=24)
-    graphs_2021 = dynamic_graph_builder.build_daily_graphs(dual_year_data['od_2021'], num_days=7)
-    graphs_2024 = dynamic_graph_builder.build_daily_graphs(dual_year_data['od_2024'], num_days=7)
+    # Build static flow-only graphs (1 aggregated graph per year)
+    logger.info(f"Building static flow-only graphs with threshold={config.FLOW_THRESHOLD}")
+    edge_index_2021, edge_weights_2021 = graph_builder.build_flow_graph(
+        dual_year_data['od_2021'],
+        threshold=config.FLOW_THRESHOLD
+    )
+    edge_index_2024, edge_weights_2024 = graph_builder.build_flow_graph(
+        dual_year_data['od_2024'],
+        threshold=config.FLOW_THRESHOLD
+    )
 
-    # Also build a static graph for compatibility (using 2024 data)
-    edge_index, edge_weights = graph_builder.build_hybrid_graph(dual_year_data['od_2024'])
+    # Wrap in single-element lists for compatibility with existing code
+    graphs_2021 = [(edge_index_2021, edge_weights_2021)]
+    graphs_2024 = [(edge_index_2024, edge_weights_2024)]
+
+    # Build a static graph for compatibility (using 2024 data)
+    # Note: This is the same as graphs_2024[0] but kept for backward compatibility
+    edge_index, edge_weights = edge_index_2024, edge_weights_2024
 
     # Create grid_id to index mapping
     grid_id_to_idx = graph_builder.grid_id_to_idx
 
     logger.info(f"\nComplete data preparation:")
     logger.info(f"  - Total grids: {len(labels)}")
-    logger.info(f"  - Static graph edges: {edge_index.shape[1]}")
-    logger.info(f"  - Dynamic graphs 2021: {len(graphs_2021)} daily snapshots")
-    logger.info(f"  - Dynamic graphs 2024: {len(graphs_2024)} daily snapshots")
+    logger.info(f"  - Static flow graph 2021: {graphs_2021[0][0].shape[1]} edges")
+    logger.info(f"  - Static flow graph 2024: {graphs_2024[0][0].shape[1]} edges")
     logger.info(f"  - Feature dimension: {list(dual_year_data['change_features'].values())[0].shape}")
+    logger.info(f"  - Using flow-only features (ellipse features disabled)")
 
     data = {
         'metadata_df': metadata_sampled,
@@ -601,9 +575,9 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
                 f.write(f"  Data 2024 mtime: {data_2024_mtime}\n")
                 f.write(f"  Samples per class: {samples_per_class if samples_per_class else 'ALL'}\n")
                 f.write(f"  Total grids: {len(labels)}\n")
-                f.write(f"  Static graph edges: {edge_index.shape[1]}\n")
-                f.write(f"  Dynamic graphs 2021: {len(graphs_2021)} daily snapshots\n")
-                f.write(f"  Dynamic graphs 2024: {len(graphs_2024)} daily snapshots\n")
+                f.write(f"  Static flow graph 2021: {graphs_2021[0][0].shape[1]} edges\n")
+                f.write(f"  Static flow graph 2024: {graphs_2024[0][0].shape[1]} edges\n")
+                f.write(f"  Flow threshold: {config.FLOW_THRESHOLD}\n")
                 f.write(f"  Feature shape: {list(dual_year_data['change_features'].values())[0].shape}\n")
                 f.write(f"  Class distribution:\n")
                 for i in range(config.NUM_CLASSES):

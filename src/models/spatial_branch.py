@@ -430,3 +430,224 @@ if __name__ == "__main__":
     print(f"  diff: {diff.shape}")
     print(f"Expected: (num_nodes, 256) for each")
     print(f"Model parameters: {sum(p.numel() for p in new_model.parameters())}")
+"""
+Simplified GAT-based spatial branch for static flow-only graphs
+"""
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import GATConv
+from typing import List, Tuple
+import config
+
+
+class SimplifiedDualYearGAT(nn.Module):
+    """Simplified spatial branch using static flow-only graphs with GAT"""
+
+    def __init__(self,
+                 input_size: int = 2,  # [total_log, net_flow_log]
+                 hidden_size: int = 128,
+                 num_layers: int = 3,
+                 heads: int = 4,
+                 dropout: float = 0.2,
+                 output_size: int = 256):
+        """
+        Initialize simplified dual-year GAT
+
+        Args:
+            input_size: Input feature dimension per year (2 features)
+            hidden_size: Hidden feature dimension
+            num_layers: Number of GAT layers
+            heads: Number of attention heads
+            dropout: Dropout rate
+            output_size: Output feature size
+        """
+        super(SimplifiedDualYearGAT, self).__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.heads = heads
+        self.dropout_rate = dropout
+        self.output_size = output_size
+
+        # GAT layers (process each day separately with static graph)
+        # First layer: input_size -> hidden_size
+        # Middle layers: hidden_size*heads -> hidden_size
+        # Last layer: hidden_size*heads -> hidden_size
+        self.gat_layers = nn.ModuleList()
+
+        for i in range(num_layers):
+            if i == 0:
+                # First layer
+                in_channels = input_size
+            else:
+                # Subsequent layers (concat heads from previous layer)
+                in_channels = hidden_size * heads
+
+            self.gat_layers.append(
+                GATConv(
+                    in_channels=in_channels,
+                    out_channels=hidden_size,
+                    heads=heads,
+                    dropout=dropout,
+                    edge_dim=1  # Edge weights from flow graph
+                )
+            )
+
+        # Output projection: (hidden_size * heads) -> output_size
+        self.output_proj = nn.Linear(hidden_size * heads, output_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def process_year(self, x, edge_index, edge_attr):
+        """
+        Process one year's data with static graph
+
+        Args:
+            x: Node features (num_nodes, 7, 2) - 7 days of flow features
+            edge_index: Static graph edge indices (2, num_edges)
+            edge_attr: Static graph edge weights (num_edges,)
+
+        Returns:
+            h: Aggregated node features (num_nodes, output_size)
+        """
+        num_nodes = x.size(0)
+        num_days = x.size(1)  # 7 days
+
+        # Process each day separately with the same static graph
+        daily_embeddings = []
+
+        for t in range(num_days):
+            # Extract features for day t: (num_nodes, 2)
+            x_t = x[:, t, :]
+
+            h = x_t
+
+            # Apply GAT layers
+            for gat_layer in self.gat_layers:
+                h = gat_layer(h, edge_index, edge_attr)
+                h = F.elu(h)
+                h = self.dropout(h)
+
+            # h shape: (num_nodes, hidden_size * heads)
+            daily_embeddings.append(h)
+
+        # Stack daily embeddings: (7, num_nodes, hidden_size*heads)
+        daily_embeddings = torch.stack(daily_embeddings, dim=0)
+
+        # Temporal aggregation: average over 7 days
+        # (7, num_nodes, hidden_size*heads) -> (num_nodes, hidden_size*heads)
+        h_aggregated = daily_embeddings.mean(dim=0)
+
+        # Project to output size: (num_nodes, hidden_size*heads) -> (num_nodes, output_size)
+        h_out = self.output_proj(h_aggregated)
+
+        return h_out
+
+    def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, node_indices=None):
+        """
+        Forward pass for both years
+
+        Args:
+            x_2021: Node features for 2021 (num_nodes, 7, 2)
+            x_2024: Node features for 2024 (num_nodes, 7, 2)
+            graphs_2021: List with single (edge_index, edge_attr) tuple for 2021
+            graphs_2024: List with single (edge_index, edge_attr) tuple for 2024
+            node_indices: Optional node indices for batch extraction
+
+        Returns:
+            h_2021: Features for 2021 (batch_size, output_size)
+            h_2024: Features for 2024 (batch_size, output_size)
+            diff: Difference features (batch_size, output_size)
+        """
+        # Extract static graphs (single graph per year)
+        edge_index_2021, edge_attr_2021 = graphs_2021[0]
+        edge_index_2024, edge_attr_2024 = graphs_2024[0]
+
+        # Ensure edge_attr is 2D: (num_edges,) -> (num_edges, 1)
+        if edge_attr_2021.dim() == 1:
+            edge_attr_2021 = edge_attr_2021.unsqueeze(-1)
+        if edge_attr_2024.dim() == 1:
+            edge_attr_2024 = edge_attr_2024.unsqueeze(-1)
+
+        # Process 2021 with static flow graph
+        h_2021 = self.process_year(x_2021, edge_index_2021, edge_attr_2021)
+
+        # Process 2024 with static flow graph
+        h_2024 = self.process_year(x_2024, edge_index_2024, edge_attr_2024)
+
+        # Compute difference (spatial change pattern)
+        diff = h_2024 - h_2021
+
+        # Extract batch nodes if indices provided
+        if node_indices is not None:
+            h_2021 = h_2021[node_indices]
+            h_2024 = h_2024[node_indices]
+            diff = diff[node_indices]
+
+        return h_2021, h_2024, diff
+
+
+if __name__ == "__main__":
+    """Test the simplified GAT model"""
+    print("Testing SimplifiedDualYearGAT")
+    print("=" * 80)
+
+    # Test parameters
+    num_nodes = 100
+    num_edges = 500
+    batch_size = 16
+
+    # Create test data
+    x_2021 = torch.randn(num_nodes, 7, 2)  # 7 days, 2 features
+    x_2024 = torch.randn(num_nodes, 7, 2)
+
+    # Create static graphs (single graph per year)
+    edge_index_2021 = torch.randint(0, num_nodes, (2, num_edges))
+    edge_attr_2021 = torch.rand(num_edges)  # Flow weights
+
+    edge_index_2024 = torch.randint(0, num_nodes, (2, num_edges))
+    edge_attr_2024 = torch.rand(num_edges)
+
+    graphs_2021 = [(edge_index_2021, edge_attr_2021)]
+    graphs_2024 = [(edge_index_2024, edge_attr_2024)]
+
+    # Create model
+    model = SimplifiedDualYearGAT(
+        input_size=2,
+        hidden_size=128,
+        num_layers=3,
+        heads=4,
+        output_size=256
+    )
+
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"\nInput shapes:")
+    print(f"  x_2021: {x_2021.shape}")
+    print(f"  x_2024: {x_2024.shape}")
+    print(f"  graphs_2021: 1 static graph with {num_edges} edges")
+    print(f"  graphs_2024: 1 static graph with {num_edges} edges")
+
+    # Test forward pass (full graph)
+    print(f"\n=== Full Graph Forward Pass ===")
+    h_2021, h_2024, diff = model(x_2021, x_2024, graphs_2021, graphs_2024)
+    print(f"Output shapes:")
+    print(f"  h_2021: {h_2021.shape}")
+    print(f"  h_2024: {h_2024.shape}")
+    print(f"  diff: {diff.shape}")
+    print(f"Expected: ({num_nodes}, 256) for each")
+
+    # Test forward pass (batch)
+    print(f"\n=== Batch Forward Pass ===")
+    node_indices = torch.randint(0, num_nodes, (batch_size,))
+    h_2021_batch, h_2024_batch, diff_batch = model(
+        x_2021, x_2024, graphs_2021, graphs_2024, node_indices=node_indices
+    )
+    print(f"Batch size: {batch_size}")
+    print(f"Output shapes:")
+    print(f"  h_2021: {h_2021_batch.shape}")
+    print(f"  h_2024: {h_2024_batch.shape}")
+    print(f"  diff: {diff_batch.shape}")
+    print(f"Expected: ({batch_size}, 256) for each")
+
+    print(f"\n✓ All tests passed!")

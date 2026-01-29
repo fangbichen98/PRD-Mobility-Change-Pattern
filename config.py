@@ -5,10 +5,10 @@ import os
 
 # Data paths
 DATA_DIR = "data"
-OD_2021_PATH = os.path.join(DATA_DIR, "2021.csv")
-OD_2024_PATH = os.path.join(DATA_DIR, "2024.csv")
+OD_2021_PATH = os.path.join(DATA_DIR, "2021_week.csv")
+OD_2024_PATH = os.path.join(DATA_DIR, "2024_week.csv")
 GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "PRD_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "labels_1w_20251228.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "labels.csv")
 
 # Output paths
 OUTPUT_DIR = "outputs"
@@ -52,6 +52,23 @@ DYSAT_HEADS = 2  # Number of attention heads
 DYSAT_DROPOUT = 0.2
 TIME_WINDOW = 24  # 24-hour sliding window (for old model)
 
+# Graph construction mode
+USE_STATIC_GRAPH = True  # Use static aggregated graphs instead of dynamic
+USE_FLOW_ONLY_GRAPH = True  # Use flow-only graphs, not hybrid k-NN
+
+# Flow graph configuration
+FLOW_THRESHOLD = 10.0  # Minimum flow to create edge
+                       # Recommended values:
+                       # - 5: Aggressive (~28,563 edges)
+                       # - 10: Balanced (~10,956 edges) - RECOMMENDED
+                       # - 20: Conservative (~3,553 edges)
+
+# Spatial branch configuration
+SPATIAL_BRANCH_TYPE = 'gat'  # 'dysat' or 'gat'
+GAT_HIDDEN_SIZE = 128
+GAT_LAYERS = 3
+GAT_HEADS = 4
+
 # Fusion layer
 FUSION_HIDDEN_SIZE = 256
 ATTENTION_HEADS = 4
@@ -64,8 +81,9 @@ EARLY_STOPPING_PATIENCE = 15
 WEIGHT_DECAY = 1e-5
 
 # Evaluation parameters
-TEST_SPLIT = 0.2
+TRAIN_SPLIT = 0.7
 VAL_SPLIT = 0.1
+TEST_SPLIT = 0.2
 RANDOM_SEED = 42
 
 # Visualization parameters
