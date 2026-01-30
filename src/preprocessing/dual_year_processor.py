@@ -251,25 +251,24 @@ class DualYearDataProcessor:
             flow_2021_raw = flows_2021_raw[grid_id]  # (7, 2)
             flow_2024_raw = flows_2024_raw[grid_id]  # (7, 2)
 
-            # Compute total and net_flow for each year
+            # NEW: Use only total flow at each time step (simplified)
+            # This focuses purely on flow intensity changes
+
+            # Compute total flow for each year
             # Total = inflow + outflow (flow intensity)
             total_2021 = flow_2021_raw[:, 0] + flow_2021_raw[:, 1]  # (7,)
             total_2024 = flow_2024_raw[:, 0] + flow_2024_raw[:, 1]  # (7,)
 
-            # Net flow = outflow - inflow (spatial direction: positive=diffusion, negative=aggregation)
-            net_flow_2021 = flow_2021_raw[:, 1] - flow_2021_raw[:, 0]  # (7,)
-            net_flow_2024 = flow_2024_raw[:, 1] - flow_2024_raw[:, 0]  # (7,)
-
             # Apply log transformation to preserve magnitude
-            total_2021_log, net_flow_2021_log = self.log_transform_features(total_2021, net_flow_2021)
-            total_2024_log, net_flow_2024_log = self.log_transform_features(total_2024, net_flow_2024)
+            total_2021_log = np.log1p(total_2021)
+            total_2024_log = np.log1p(total_2024)
 
-            # Use only flow features (ellipse features removed for simplified model)
-            # Shape: (7, 4) = [total_2021_log, total_2024_log, net_2021_log, net_2024_log]
+            # Use only total flow features (no net flow)
+            # Shape: (7, 2) = [total_2021_log, total_2024_log]
             combined = np.stack([
-                total_2021_log, total_2024_log,
-                net_flow_2021_log, net_flow_2024_log
-            ], axis=1)  # (7, 4)
+                total_2021_log,
+                total_2024_log
+            ], axis=1)  # (7, 2)
 
             change_features[grid_id] = combined
 
@@ -279,7 +278,7 @@ class DualYearDataProcessor:
             logger.info(f"  - Grids without ellipse features: {grids_without_ellipse}")
             logger.info(f"Feature shape per grid: (7, 8) = [total_2021, total_2024, net_2021, net_2024, ecc_2021, area_2021, ecc_2024, area_2024]")
         else:
-            logger.info(f"Feature shape per grid: (7, 4) = [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]")
+            logger.info(f"Feature shape per grid: (7, 2) = [total_2021_log, total_2024_log]")
 
         return change_features
 

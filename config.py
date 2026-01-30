@@ -25,7 +25,7 @@ TIME_STEPS = 7  # NEW: 7 daily snapshots (for improved model)
 AGGREGATION_METHOD = 'sum'  # Time aggregation method
 
 # Feature parameters
-TEMPORAL_INPUT_SIZE = 2  # [total_log, net_flow_log] - flow features for temporal branch
+TEMPORAL_INPUT_SIZE = 1  # [total_log] - only total flow for temporal branch
 SPATIAL_INPUT_SIZE = 2   # [eccentricity, log_area] - ellipse features for spatial branch
 NORMALIZATION = 'log'  # 'log', 'none', 'zscore'
 USE_LOG_TRANSFORM = True
