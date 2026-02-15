@@ -177,6 +177,10 @@ class PureGraphDualYearGAT(nn.Module):
         edge_index_2021, edge_attr_2021 = graphs_2021[0]
         edge_index_2024, edge_attr_2024 = graphs_2024[0]
 
+        # Ensure edge attributes are float32
+        edge_attr_2021 = edge_attr_2021.float()
+        edge_attr_2024 = edge_attr_2024.float()
+
         # Process 2021 with static flow graph
         h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes)
 

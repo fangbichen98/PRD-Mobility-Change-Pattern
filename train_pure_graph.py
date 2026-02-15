@@ -1,5 +1,5 @@
 """
-Training script for pure graph-based hierarchical model
+Training script for pure graph-based 9-class model
 Simplified version that uses only graph structure for spatial branch
 """
 import os
@@ -31,47 +31,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def convert_labels_to_hierarchical(labels):
+def train_epoch(model, train_loader, criterion, optimizer, device, accumulation_steps=4):
     """
-    Convert 9-class labels to hierarchical labels
-
-    Args:
-        labels: Tensor of shape (batch_size,) with values 0-8
-
-    Returns:
-        intensity_labels: (batch_size,) with values 0-2
-        direction_labels: (batch_size,) with values 0-2
-    """
-    intensity_labels = labels // 3  # 0, 1, 2
-    direction_labels = labels % 3   # 0, 1, 2
-    return intensity_labels, direction_labels
-
-
-def combine_hierarchical_predictions(intensity_pred, direction_pred):
-    """
-    Combine hierarchical predictions into 9-class predictions
-
-    Args:
-        intensity_pred: (batch_size,) with values 0-2
-        direction_pred: (batch_size,) with values 0-2
-
-    Returns:
-        combined_pred: (batch_size,) with values 0-8
-    """
-    return intensity_pred * 3 + direction_pred
-
-
-def train_epoch_hierarchical(model, train_loader, criterion_intensity, criterion_direction,
-                            criterion_direct, optimizer, device, accumulation_steps=4):
-    """
-    Train one epoch with hierarchical classification
+    Train one epoch with 9-class classification
 
     Args:
         model: The model to train
         train_loader: Training data loader
-        criterion_intensity: Loss function for intensity classification
-        criterion_direction: Loss function for direction classification
-        criterion_direct: Loss function for direct 9-class classification
+        criterion: Loss function for 9-class classification
         optimizer: Optimizer
         device: Device to use
         accumulation_steps: Number of steps for gradient accumulation
@@ -82,12 +49,7 @@ def train_epoch_hierarchical(model, train_loader, criterion_intensity, criterion
     model.train()
     total_loss = 0
     total_samples = 0
-
-    # Metrics
-    intensity_correct = 0
-    direction_correct = 0
-    hierarchical_correct = 0
-    direct_correct = 0
+    correct = 0
 
     optimizer.zero_grad()
 
@@ -109,11 +71,8 @@ def train_epoch_hierarchical(model, train_loader, criterion_intensity, criterion
                         torch.from_numpy(edge_attr).to(device) if isinstance(edge_attr, np.ndarray) else edge_attr.to(device))
                        for edge_idx, edge_attr in batch['graphs_2024']]
 
-        # Convert labels to hierarchical
-        intensity_labels, direction_labels = convert_labels_to_hierarchical(labels)
-
         # Forward pass
-        intensity_logits, direction_logits, direct_logits = model(
+        logits = model(
             x_2021=all_temporal_2021,
             x_2024=all_temporal_2024,
             graphs_2021=graphs_2021,
@@ -122,13 +81,8 @@ def train_epoch_hierarchical(model, train_loader, criterion_intensity, criterion
             node_indices=node_indices
         )
 
-        # Compute losses
-        loss_intensity = criterion_intensity(intensity_logits, intensity_labels)
-        loss_direction = criterion_direction(direction_logits, direction_labels)
-        loss_direct = criterion_direct(direct_logits, labels)
-
-        # Combined loss (weighted)
-        loss = (loss_intensity + loss_direction + 0.5 * loss_direct) / 4
+        # Compute loss
+        loss = criterion(logits, labels)
 
         # Backward pass with gradient accumulation
         loss.backward()
@@ -140,28 +94,18 @@ def train_epoch_hierarchical(model, train_loader, criterion_intensity, criterion
             optimizer.zero_grad()
 
         # Compute predictions
-        intensity_pred = intensity_logits.argmax(dim=1)
-        direction_pred = direction_logits.argmax(dim=1)
-        hierarchical_pred = combine_hierarchical_predictions(intensity_pred, direction_pred)
-        direct_pred = direct_logits.argmax(dim=1)
+        pred = logits.argmax(dim=1)
 
         # Update metrics
         batch_size = labels.size(0)
         total_loss += loss.item() * batch_size
         total_samples += batch_size
-
-        intensity_correct += (intensity_pred == intensity_labels).sum().item()
-        direction_correct += (direction_pred == direction_labels).sum().item()
-        hierarchical_correct += (hierarchical_pred == labels).sum().item()
-        direct_correct += (direct_pred == labels).sum().item()
+        correct += (pred == labels).sum().item()
 
         # Log progress
         if (batch_idx + 1) % 10 == 0:
             logger.info(f"  Epoch [{batch_idx + 1}/{len(train_loader)}] "
-                       f"Loss: {loss.item():.4f} "
-                       f"(I:{loss_intensity.item():.3f} "
-                       f"D:{loss_direction.item():.3f} "
-                       f"9C:{loss_direct.item():.3f})")
+                       f"Loss: {loss.item():.4f}")
 
     # Final gradient update if needed
     if (batch_idx + 1) % accumulation_steps != 0:
@@ -171,25 +115,18 @@ def train_epoch_hierarchical(model, train_loader, criterion_intensity, criterion
 
     # Compute average metrics
     avg_loss = total_loss / total_samples
-    intensity_acc = 100.0 * intensity_correct / total_samples
-    direction_acc = 100.0 * direction_correct / total_samples
-    hierarchical_acc = 100.0 * hierarchical_correct / total_samples
-    direct_acc = 100.0 * direct_correct / total_samples
+    accuracy = 100.0 * correct / total_samples
 
     return {
         'loss': avg_loss,
-        'intensity_acc': intensity_acc,
-        'direction_acc': direction_acc,
-        'hierarchical_acc': hierarchical_acc,
-        'direct_acc': direct_acc
+        'accuracy': accuracy
     }
 
 
 @torch.no_grad()
-def evaluate_hierarchical(model, data_loader, criterion_intensity, criterion_direction,
-                         criterion_direct, device):
+def evaluate(model, data_loader, criterion, device):
     """
-    Evaluate model with hierarchical classification
+    Evaluate model with 9-class classification
 
     Returns:
         Dictionary with evaluation metrics
@@ -199,10 +136,7 @@ def evaluate_hierarchical(model, data_loader, criterion_intensity, criterion_dir
     total_samples = 0
 
     # Collect predictions and labels
-    all_intensity_preds = []
-    all_direction_preds = []
-    all_hierarchical_preds = []
-    all_direct_preds = []
+    all_preds = []
     all_labels = []
 
     for batch in data_loader:
@@ -223,11 +157,8 @@ def evaluate_hierarchical(model, data_loader, criterion_intensity, criterion_dir
                         torch.from_numpy(edge_attr).to(device) if isinstance(edge_attr, np.ndarray) else edge_attr.to(device))
                        for edge_idx, edge_attr in batch['graphs_2024']]
 
-        # Convert labels
-        intensity_labels, direction_labels = convert_labels_to_hierarchical(labels)
-
         # Forward pass
-        intensity_logits, direction_logits, direct_logits = model(
+        logits = model(
             x_2021=all_temporal_2021,
             x_2024=all_temporal_2024,
             graphs_2021=graphs_2021,
@@ -236,12 +167,8 @@ def evaluate_hierarchical(model, data_loader, criterion_intensity, criterion_dir
             node_indices=node_indices
         )
 
-        # Compute losses
-        loss_intensity = criterion_intensity(intensity_logits, intensity_labels)
-        loss_direction = criterion_direction(direction_logits, direction_labels)
-        loss_direct = criterion_direct(direct_logits, labels)
-
-        loss = (loss_intensity + loss_direction + 0.5 * loss_direct) / 4
+        # Compute loss
+        loss = criterion(logits, labels)
 
         # Update metrics
         batch_size = labels.size(0)
@@ -249,58 +176,34 @@ def evaluate_hierarchical(model, data_loader, criterion_intensity, criterion_dir
         total_samples += batch_size
 
         # Compute predictions
-        intensity_pred = intensity_logits.argmax(dim=1)
-        direction_pred = direction_logits.argmax(dim=1)
-        hierarchical_pred = combine_hierarchical_predictions(intensity_pred, direction_pred)
-        direct_pred = direct_logits.argmax(dim=1)
+        pred = logits.argmax(dim=1)
 
         # Collect predictions
-        all_intensity_preds.extend(intensity_pred.cpu().numpy())
-        all_direction_preds.extend(direction_pred.cpu().numpy())
-        all_hierarchical_preds.extend(hierarchical_pred.cpu().numpy())
-        all_direct_preds.extend(direct_pred.cpu().numpy())
+        all_preds.extend(pred.cpu().numpy())
         all_labels.extend(labels.cpu().numpy())
 
     # Convert to numpy arrays
-    all_intensity_preds = np.array(all_intensity_preds)
-    all_direction_preds = np.array(all_direction_preds)
-    all_hierarchical_preds = np.array(all_hierarchical_preds)
-    all_direct_preds = np.array(all_direct_preds)
+    all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
-
-    # Convert labels to hierarchical
-    all_intensity_labels = all_labels // 3
-    all_direction_labels = all_labels % 3
 
     # Compute metrics
     avg_loss = total_loss / total_samples
-    intensity_acc = 100.0 * (all_intensity_preds == all_intensity_labels).sum() / total_samples
-    direction_acc = 100.0 * (all_direction_preds == all_direction_labels).sum() / total_samples
-    hierarchical_acc = 100.0 * (all_hierarchical_preds == all_labels).sum() / total_samples
-    direct_acc = 100.0 * (all_direct_preds == all_labels).sum() / total_samples
-
-    # Compute F1 scores
-    hierarchical_f1 = f1_score(all_labels, all_hierarchical_preds, average='macro', zero_division=0)
-    direct_f1 = f1_score(all_labels, all_direct_preds, average='macro', zero_division=0)
+    accuracy = 100.0 * (all_preds == all_labels).sum() / total_samples
+    f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
     return {
         'loss': avg_loss,
-        'intensity_acc': intensity_acc,
-        'direction_acc': direction_acc,
-        'hierarchical_acc': hierarchical_acc,
-        'hierarchical_f1': hierarchical_f1,
-        'direct_acc': direct_acc,
-        'direct_f1': direct_f1,
+        'accuracy': accuracy,
+        'f1': f1,
         'all_labels': all_labels,
-        'hierarchical_preds': all_hierarchical_preds,
-        'direct_preds': all_direct_preds
+        'all_preds': all_preds
     }
 
 
 def main():
     """Main training function"""
     logger.info("=" * 80)
-    logger.info("Pure Graph-Based Hierarchical Training")
+    logger.info("Pure Graph-Based 9-Class Training")
     logger.info("=" * 80)
 
     # Create output directory
@@ -442,8 +345,7 @@ def main():
         hidden_size=config.FUSION_HIDDEN_SIZE,
         num_classes=config.NUM_CLASSES,
         num_time_steps=config.TIME_STEPS,
-        dropout=0.2,
-        use_hierarchical=True
+        dropout=0.2
     )
 
     model = model.to(device)
@@ -470,17 +372,8 @@ def main():
 
     class_weights = data['class_weights'].to(device)
 
-    # Compute hierarchical weights
-    intensity_weights = torch.zeros(3, device=device)
-    direction_weights = torch.zeros(3, device=device)
-
-    for i in range(3):
-        intensity_weights[i] = (class_weights[i*3] + class_weights[i*3+1] + class_weights[i*3+2]) / 3
-        direction_weights[i] = (class_weights[i] + class_weights[i+3] + class_weights[i+6]) / 3
-
-    criterion_intensity = nn.CrossEntropyLoss(weight=intensity_weights)
-    criterion_direction = nn.CrossEntropyLoss(weight=direction_weights)
-    criterion_direct = nn.CrossEntropyLoss(weight=class_weights)
+    # Single loss function for 9-class classification
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
 
     # Optimizer and scheduler
     optimizer = Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
@@ -489,7 +382,7 @@ def main():
     logger.info(f"✓ Training setup complete")
     logger.info(f"  - Optimizer: Adam (lr={config.LEARNING_RATE}, wd={config.WEIGHT_DECAY})")
     logger.info(f"  - Scheduler: ReduceLROnPlateau (patience=5)")
-    logger.info(f"  - Loss: Hierarchical (Intensity + Direction + 0.5*Direct)")
+    logger.info(f"  - Loss: Single 9-class cross-entropy with class weights")
     logger.info(f"  - Gradient accumulation: 4 steps")
 
     # Training loop
@@ -497,59 +390,48 @@ def main():
     logger.info("Step 6: Training")
     logger.info("=" * 80)
 
-    best_hierarchical_acc = 0
-    best_direct_acc = 0
+    best_accuracy = 0
     patience_counter = 0
 
     for epoch in range(config.NUM_EPOCHS):
         logger.info(f"\nEpoch {epoch + 1}/{config.NUM_EPOCHS}")
 
         # Train
-        train_metrics = train_epoch_hierarchical(
+        train_metrics = train_epoch(
             model, train_loader,
-            criterion_intensity, criterion_direction, criterion_direct,
-            optimizer, device, accumulation_steps=4
+            criterion, optimizer, device, accumulation_steps=4
         )
 
         # Validate
-        val_metrics = evaluate_hierarchical(
+        val_metrics = evaluate(
             model, val_loader,
-            criterion_intensity, criterion_direction, criterion_direct,
-            device
+            criterion, device
         )
 
         # Log metrics
         logger.info(f"  Train Loss: {train_metrics['loss']:.4f}")
-        logger.info(f"    - Intensity: {train_metrics['intensity_acc']:.2f}%")
-        logger.info(f"    - Direction: {train_metrics['direction_acc']:.2f}%")
-        logger.info(f"    - Hierarchical (3×3): {train_metrics['hierarchical_acc']:.2f}%")
-        logger.info(f"    - Direct (9-class): {train_metrics['direct_acc']:.2f}%")
+        logger.info(f"  Train Accuracy: {train_metrics['accuracy']:.2f}%")
 
-        logger.info(f"  Val Accuracy:")
-        logger.info(f"    - Intensity: {val_metrics['intensity_acc']:.2f}%")
-        logger.info(f"    - Direction: {val_metrics['direction_acc']:.2f}%")
-        logger.info(f"    - Hierarchical (3×3): {val_metrics['hierarchical_acc']:.2f}% | F1: {val_metrics['hierarchical_f1']:.4f}")
-        logger.info(f"    - Direct (9-class): {val_metrics['direct_acc']:.2f}% | F1: {val_metrics['direct_f1']:.4f}")
+        logger.info(f"  Val Loss: {val_metrics['loss']:.4f}")
+        logger.info(f"  Val Accuracy: {val_metrics['accuracy']:.2f}% | F1: {val_metrics['f1']:.4f}")
 
         # Learning rate
         current_lr = optimizer.param_groups[0]['lr']
         logger.info(f"  LR: {current_lr:.6f}")
 
         # Update scheduler
-        scheduler.step(val_metrics['hierarchical_acc'])
+        scheduler.step(val_metrics['accuracy'])
 
         # Save best model
-        if val_metrics['hierarchical_acc'] > best_hierarchical_acc:
-            best_hierarchical_acc = val_metrics['hierarchical_acc']
-            best_direct_acc = val_metrics['direct_acc']
+        if val_metrics['accuracy'] > best_accuracy:
+            best_accuracy = val_metrics['accuracy']
             patience_counter = 0
 
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'hierarchical_acc': best_hierarchical_acc,
-                'direct_acc': best_direct_acc
+                'accuracy': best_accuracy
             }, f"{output_dir}/models/best_model.pth")
 
             logger.info(f"  ✓ New best model saved!")
@@ -564,8 +446,7 @@ def main():
             break
 
     logger.info(f"\n✓ Training completed!")
-    logger.info(f"  Best Hierarchical Acc: {best_hierarchical_acc:.2f}%")
-    logger.info(f"  Best Direct Acc: {best_direct_acc:.2f}%")
+    logger.info(f"  Best Accuracy: {best_accuracy:.2f}%")
 
     # Test
     logger.info("\n" + "=" * 80)
@@ -578,47 +459,40 @@ def main():
     logger.info(f"✓ Loaded best model from epoch {checkpoint['epoch'] + 1}")
 
     # Evaluate on test set
-    test_metrics = evaluate_hierarchical(
+    test_metrics = evaluate(
         model, test_loader,
-        criterion_intensity, criterion_direction, criterion_direct,
-        device
+        criterion, device
     )
 
     logger.info(f"\nTest Results:")
-    logger.info(f"  - Intensity Acc: {test_metrics['intensity_acc']:.2f}%")
-    logger.info(f"  - Direction Acc: {test_metrics['direction_acc']:.2f}%")
-    logger.info(f"  - Hierarchical Acc: {test_metrics['hierarchical_acc']:.2f}% | F1: {test_metrics['hierarchical_f1']:.4f}")
-    logger.info(f"  - Direct Acc: {test_metrics['direct_acc']:.2f}% | F1: {test_metrics['direct_f1']:.4f}")
+    logger.info(f"  - Accuracy: {test_metrics['accuracy']:.2f}%")
+    logger.info(f"  - F1 Score: {test_metrics['f1']:.4f}")
 
     # Save test results
     test_results = {
-        'test_intensity_acc': float(test_metrics['intensity_acc']),
-        'test_direction_acc': float(test_metrics['direction_acc']),
-        'test_hierarchical_acc': float(test_metrics['hierarchical_acc']),
-        'test_hierarchical_f1': float(test_metrics['hierarchical_f1']),
-        'test_direct_acc': float(test_metrics['direct_acc']),
-        'test_direct_f1': float(test_metrics['direct_f1'])
+        'test_accuracy': float(test_metrics['accuracy']),
+        'test_f1': float(test_metrics['f1'])
     }
 
     with open(f"{output_dir}/metrics/test_results.json", 'w') as f:
         json.dump(test_results, f, indent=2)
 
-    # Save classification reports
-    hierarchical_report = classification_report(
+    # Save classification report
+    report = classification_report(
         test_metrics['all_labels'],
-        test_metrics['hierarchical_preds'],
+        test_metrics['all_preds'],
         target_names=[f'Class {i+1}' for i in range(9)],
         zero_division=0
     )
 
-    with open(f"{output_dir}/metrics/hierarchical_classification_report.txt", 'w') as f:
-        f.write("Hierarchical Classification Report\n")
+    with open(f"{output_dir}/metrics/classification_report.txt", 'w') as f:
+        f.write("9-Class Classification Report\n")
         f.write("=" * 80 + "\n")
-        f.write(hierarchical_report)
+        f.write(report)
 
-    # Save confusion matrices
-    hierarchical_cm = confusion_matrix(test_metrics['all_labels'], test_metrics['hierarchical_preds'])
-    np.save(f"{output_dir}/metrics/hierarchical_confusion_matrix.npy", hierarchical_cm)
+    # Save confusion matrix
+    cm = confusion_matrix(test_metrics['all_labels'], test_metrics['all_preds'])
+    np.save(f"{output_dir}/metrics/confusion_matrix.npy", cm)
 
     logger.info(f"\n✓ All results saved to {output_dir}")
     logger.info("=" * 80)

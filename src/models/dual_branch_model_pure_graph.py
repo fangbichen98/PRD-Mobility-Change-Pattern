@@ -46,18 +46,19 @@ class MultiFeatureAttentionFusion(nn.Module):
 
 class PureGraphDualBranchModel(nn.Module):
     """
-    Simplified dual-branch model using pure graph structure
+    Pure Graph Dual-Branch Model for 9-Class Mobility Pattern Classification
 
     Key changes from original:
     1. Spatial branch uses only graph structure (no external node features)
     2. Temporal branch still uses time series features (kept for temporal patterns)
     3. Fusion combines 6 temporal + 3 spatial = 9 features
+    4. Single 9-class classification head (simplified from hierarchical)
 
     Architecture:
         Temporal Branch: LSTM + SPP → 6 features (2021, 2024, diff) × 2
         Spatial Branch: Pure Graph GAT → 3 features (2021, 2024, diff)
         Fusion: Multi-head attention → 256-dim
-        Heads: Intensity (3), Direction (3), Direct (9)
+        Classifier: Single 9-class classification head
     """
 
     def __init__(self,
@@ -65,8 +66,7 @@ class PureGraphDualBranchModel(nn.Module):
                  hidden_size: int = 256,
                  num_classes: int = config.NUM_CLASSES,
                  num_time_steps: int = 7,
-                 dropout: float = 0.2,
-                 use_hierarchical: bool = True):
+                 dropout: float = 0.2):
         """
         Initialize pure graph dual-branch model
 
@@ -76,11 +76,8 @@ class PureGraphDualBranchModel(nn.Module):
             num_classes: Number of output classes (9)
             num_time_steps: Number of time steps (7 days)
             dropout: Dropout rate
-            use_hierarchical: If True, use hierarchical classification (3×3)
         """
         super(PureGraphDualBranchModel, self).__init__()
-
-        self.use_hierarchical = use_hierarchical
 
         # Temporal branch (unchanged - still uses time series features)
         self.temporal_branch = ParallelTemporalBranch(
@@ -102,39 +99,13 @@ class PureGraphDualBranchModel(nn.Module):
             dropout=dropout
         )
 
-        if use_hierarchical:
-            # Hierarchical classification heads
-            # Head 1: Flow intensity (Stable/Growth/Decline)
-            self.intensity_classifier = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size // 2),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_size // 2, 3)
-            )
-
-            # Head 2: Spatial direction (Balanced/Aggregation/Diffusion)
-            self.direction_classifier = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size // 2),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_size // 2, 3)
-            )
-
-            # Head 3: Direct 9-class classification (for comparison)
-            self.direct_classifier = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size // 2),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_size // 2, num_classes)
-            )
-        else:
-            # Original single classification head
-            self.classifier = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size // 2),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_size // 2, num_classes)
-            )
+        # Single 9-class classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size // 2, num_classes)
+        )
 
     def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, num_nodes, node_indices=None):
         """
@@ -149,12 +120,7 @@ class PureGraphDualBranchModel(nn.Module):
             node_indices: Optional node indices for batch extraction
 
         Returns:
-            If use_hierarchical=True:
-                intensity_logits: (batch_size, 3)
-                direction_logits: (batch_size, 3)
-                direct_logits: (batch_size, 9)
-            If use_hierarchical=False:
-                logits: (batch_size, num_classes)
+            logits: (batch_size, num_classes) - 9-class classification logits
         """
         # Extract batch features for temporal branch
         if node_indices is not None:
@@ -186,18 +152,10 @@ class PureGraphDualBranchModel(nn.Module):
         # Fuse features using multi-head attention
         fused_features = self.fusion(all_features)
 
-        # Classification
-        if self.use_hierarchical:
-            # Three classification outputs
-            intensity_logits = self.intensity_classifier(fused_features)
-            direction_logits = self.direction_classifier(fused_features)
-            direct_logits = self.direct_classifier(fused_features)
+        # Single 9-class classification
+        logits = self.classifier(fused_features)
 
-            return intensity_logits, direction_logits, direct_logits
-        else:
-            # Single classification output
-            logits = self.classifier(fused_features)
-            return logits
+        return logits
 
     def get_embeddings(self, x_2021, x_2024, graphs_2021, graphs_2024, num_nodes, node_indices=None):
         """
@@ -270,15 +228,14 @@ if __name__ == "__main__":
         hidden_size=256,
         num_classes=9,
         num_time_steps=7,
-        dropout=0.2,
-        use_hierarchical=True
+        dropout=0.2
     )
 
     print(f"\nModel Architecture:")
     print(f"  - Temporal Branch: LSTM + SPP → 6 features")
     print(f"  - Spatial Branch: Pure Graph GAT → 3 features")
     print(f"  - Fusion: Multi-head Attention → 256-dim")
-    print(f"  - Classification: Hierarchical (3×3) + Direct (9)")
+    print(f"  - Classification: Single 9-class head")
     print(f"  - Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Test forward pass
@@ -290,7 +247,7 @@ if __name__ == "__main__":
 
     model.eval()
     with torch.no_grad():
-        intensity_logits, direction_logits, direct_logits = model(
+        logits = model(
             x_2021=x_2021,
             x_2024=x_2024,
             graphs_2021=graphs_2021,
@@ -300,14 +257,13 @@ if __name__ == "__main__":
         )
 
     print(f"\nOutput shapes:")
-    print(f"  - Intensity logits: {intensity_logits.shape} (expected: {batch_size}, 3)")
-    print(f"  - Direction logits: {direction_logits.shape} (expected: {batch_size}, 3)")
-    print(f"  - Direct logits: {direct_logits.shape} (expected: {batch_size}, 9)")
+    print(f"  - Logits: {logits.shape} (expected: {batch_size}, 9)")
 
     print("\n" + "=" * 80)
     print("✓ All tests passed!")
-    print("\nKey improvements:")
+    print("\nKey features:")
     print("  1. Spatial branch uses only graph structure (no redundant node features)")
     print("  2. Single GAT pass per year (not 7 daily passes)")
     print("  3. ~7x faster spatial processing")
     print("  4. Simpler data preprocessing")
+    print("  5. Single 9-class classification (simplified from hierarchical)")
