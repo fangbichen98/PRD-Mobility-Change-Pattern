@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
 import logging
 from datetime import datetime
+import time
 from sklearn.metrics import f1_score, classification_report, confusion_matrix
 import json
 
@@ -200,11 +201,24 @@ def evaluate(model, data_loader, criterion, device):
     }
 
 
+def format_time(seconds):
+    """Format seconds into readable time string"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 def main():
     """Main training function"""
+    # Record start time
+    start_time = time.time()
+    start_datetime = datetime.now()
+
     logger.info("=" * 80)
     logger.info("Pure Graph-Based 9-Class Training")
     logger.info("=" * 80)
+    logger.info(f"Training started at: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -227,7 +241,7 @@ def main():
     logger.info("=" * 80)
 
     data = prepare_dual_year_experiment_data(
-        label_path='data/labels.csv',
+        label_path='data/labels3.csv',
         samples_per_class=None,
         use_cache=True
     )
@@ -495,6 +509,36 @@ def main():
     np.save(f"{output_dir}/metrics/confusion_matrix.npy", cm)
 
     logger.info(f"\n✓ All results saved to {output_dir}")
+    logger.info("=" * 80)
+
+    # Calculate and log total training time
+    end_time = time.time()
+    end_datetime = datetime.now()
+    total_time = end_time - start_time
+
+    logger.info("\n" + "=" * 80)
+    logger.info("Training Time Statistics")
+    logger.info("=" * 80)
+    logger.info(f"Start time:    {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"End time:      {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Total time:    {format_time(total_time)} ({total_time:.2f} seconds)")
+    logger.info(f"               ({total_time/60:.2f} minutes, {total_time/3600:.2f} hours)")
+    logger.info("=" * 80)
+
+    # Save timing information to file
+    timing_info = {
+        "start_time": start_datetime.strftime('%Y-%m-%d %H:%M:%S'),
+        "end_time": end_datetime.strftime('%Y-%m-%d %H:%M:%S'),
+        "total_time_seconds": total_time,
+        "total_time_formatted": format_time(total_time),
+        "total_time_minutes": total_time / 60,
+        "total_time_hours": total_time / 3600
+    }
+
+    with open(f"{output_dir}/metrics/timing_info.json", 'w') as f:
+        json.dump(timing_info, f, indent=2)
+
+    logger.info(f"✓ Timing info saved to {output_dir}/metrics/timing_info.json")
     logger.info("=" * 80)
 
 

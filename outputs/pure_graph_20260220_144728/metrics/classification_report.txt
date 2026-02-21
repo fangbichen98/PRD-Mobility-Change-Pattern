@@ -1,0 +1,17 @@
+9-Class Classification Report
+================================================================================
+              precision    recall  f1-score   support
+
+     Class 1       0.17      0.68      0.27        62
+     Class 2       0.00      0.00      0.00        77
+     Class 3       0.00      0.00      0.00         5
+     Class 4       0.21      0.29      0.24       104
+     Class 5       0.58      0.48      0.52       212
+     Class 6       0.00      0.00      0.00         9
+     Class 7       0.00      0.00      0.00       127
+     Class 8       0.45      0.54      0.49       134
+     Class 9       0.00      0.00      0.00        21
+
+    accuracy                           0.33       751
+   macro avg       0.16      0.22      0.17       751
+weighted avg       0.29      0.33      0.29       751
