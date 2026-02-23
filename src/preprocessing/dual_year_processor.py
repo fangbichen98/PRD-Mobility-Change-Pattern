@@ -397,7 +397,8 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
 
     # 3. Generate cache key
     label_basename = os.path.basename(label_path)
-    cache_key = f"{label_basename}_{label_content_hash}_samples_{samples_per_class}_data_{data_2021_mtime}_{data_2024_mtime}_v3"
+    # Include FLOW_THRESHOLD in cache key to ensure graph rebuild when threshold changes
+    cache_key = f"{label_basename}_{label_content_hash}_samples_{samples_per_class}_data_{data_2021_mtime}_{data_2024_mtime}_threshold_{config.FLOW_THRESHOLD}_v4"
     cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:12]  # Use 12-char hash for better uniqueness
 
     cache_file = os.path.join(cache_dir, f"dual_year_data_{cache_hash}.pkl")

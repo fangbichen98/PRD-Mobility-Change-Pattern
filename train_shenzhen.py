@@ -24,7 +24,12 @@ from src.preprocessing.dual_year_processor import prepare_dual_year_experiment_d
 
 # Adjust flow threshold for Shenzhen data (reduce graph size)
 # Shenzhen has much more flow data, so we need higher threshold
-config.FLOW_THRESHOLD = 40.0  # Will create ~70K-120K edges instead of 300K+
+# Original labels (3051万 OD): threshold 40 works (~73K-96K edges)
+# Sorted labels (4047万 OD): need much higher threshold
+# Threshold 50: 119K-163K edges (OOM)
+# Threshold 60: 91K-133K edges (OOM)
+# Threshold 70: should be ~70K-100K edges
+config.FLOW_THRESHOLD = 70.0
 from src.training.dataset_pure_graph import PureGraphDualYearDataset, PureGraphBatchCollator
 from src.models.dual_branch_model_pure_graph import PureGraphDualBranchModel
 
@@ -486,10 +491,27 @@ def main():
     logger.info(f"  - Accuracy: {test_metrics['accuracy']:.2f}%")
     logger.info(f"  - F1 Score: {test_metrics['f1']:.4f}")
 
-    # Save test results
+    # Save test results with configuration
     test_results = {
         'test_accuracy': float(test_metrics['accuracy']),
-        'test_f1': float(test_metrics['f1'])
+        'test_f1': float(test_metrics['f1']),
+        'configuration': {
+            'flow_threshold': config.FLOW_THRESHOLD,
+            'batch_size': config.BATCH_SIZE,
+            'learning_rate': config.LEARNING_RATE,
+            'train_split': config.TRAIN_SPLIT,
+            'val_split': config.VAL_SPLIT,
+            'test_split': config.TEST_SPLIT,
+            'random_seed': config.RANDOM_SEED
+        },
+        'data_info': {
+            'total_samples': len(data['labels']),
+            'train_samples': len(train_dataset),
+            'val_samples': len(val_dataset),
+            'test_samples': len(test_dataset),
+            'graph_2021_edges': int(data['graphs_2021'][0][0].shape[1]),
+            'graph_2024_edges': int(data['graphs_2024'][0][0].shape[1])
+        }
     }
 
     with open(f"{output_dir}/metrics/test_results.json", 'w') as f:
@@ -504,8 +526,18 @@ def main():
     )
 
     with open(f"{output_dir}/metrics/classification_report.txt", 'w') as f:
-        f.write("9-Class Classification Report\n")
-        f.write("=" * 80 + "\n")
+        f.write("9-Class Classification Report - Shenzhen Internal Mobility\n")
+        f.write("=" * 80 + "\n\n")
+        f.write("Configuration:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"  Flow Threshold: {config.FLOW_THRESHOLD}\n")
+        f.write(f"  Batch Size: {config.BATCH_SIZE}\n")
+        f.write(f"  Learning Rate: {config.LEARNING_RATE}\n")
+        f.write(f"  Train/Val/Test Split: {config.TRAIN_SPLIT}/{config.VAL_SPLIT}/{config.TEST_SPLIT}\n")
+        f.write(f"  Graph 2021 Edges: {int(data['graphs_2021'][0][0].shape[1])}\n")
+        f.write(f"  Graph 2024 Edges: {int(data['graphs_2024'][0][0].shape[1])}\n")
+        f.write("\n")
+        f.write("=" * 80 + "\n\n")
         f.write(report)
 
     # Save confusion matrix

@@ -1,0 +1,29 @@
+9-Class Classification Report - Shenzhen Internal Mobility
+================================================================================
+
+Configuration:
+--------------------------------------------------------------------------------
+  Flow Threshold: 70.0
+  Batch Size: 16
+  Learning Rate: 0.001
+  Train/Val/Test Split: 0.7/0.1/0.2
+  Graph 2021 Edges: 71473
+  Graph 2024 Edges: 110363
+
+================================================================================
+
+              precision    recall  f1-score   support
+
+     Class 1       0.00      0.00      0.00        75
+     Class 2       0.13      0.02      0.03       125
+     Class 3       0.00      0.00      0.00         3
+     Class 4       0.00      0.00      0.00        69
+     Class 5       0.46      0.87      0.60       193
+     Class 6       0.00      0.00      0.00         4
+     Class 7       0.24      0.63      0.35       130
+     Class 8       0.47      0.16      0.23       192
+     Class 9       0.11      0.11      0.11         9
+
+    accuracy                           0.35       800
+   macro avg       0.16      0.20      0.15       800
+weighted avg       0.28      0.35      0.26       800
