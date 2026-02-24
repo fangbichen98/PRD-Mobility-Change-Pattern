@@ -270,14 +270,15 @@ def main():
     temporal_features_2024 = {}
 
     for grid_id, features in data['change_features'].items():
-        # features shape: (7, 2) = [total_2021_log, total_2024_log]
+        # features shape: (168, 2) = [total_2021_log, total_2024_log] (hourly snapshots)
         # Each year gets 1 feature (total flow only)
-        temporal_features_2021[grid_id] = features[:, [0]]  # (7, 1) - total for 2021
-        temporal_features_2024[grid_id] = features[:, [1]]  # (7, 1) - total for 2024
+        temporal_features_2021[grid_id] = features[:, [0]]  # (168, 1) - total for 2021
+        temporal_features_2024[grid_id] = features[:, [1]]  # (168, 1) - total for 2024
 
     logger.info(f"✓ Temporal features prepared")
     logger.info(f"  - 2021 features: {len(temporal_features_2021)} grids")
     logger.info(f"  - 2024 features: {len(temporal_features_2024)} grids")
+    logger.info(f"  - Feature shape: (168, 1) - 168 hourly snapshots")
 
     # Create dataset
     logger.info("\n" + "=" * 80)
@@ -311,8 +312,8 @@ def main():
 
     # Prepare all temporal features as tensors
     num_nodes = len(data['grid_id_to_idx'])
-    all_temporal_2021 = torch.zeros(num_nodes, 7, 1)
-    all_temporal_2024 = torch.zeros(num_nodes, 7, 1)
+    all_temporal_2021 = torch.zeros(num_nodes, 168, 1)
+    all_temporal_2024 = torch.zeros(num_nodes, 168, 1)
 
     for grid_id, idx in data['grid_id_to_idx'].items():
         if grid_id in temporal_features_2021:

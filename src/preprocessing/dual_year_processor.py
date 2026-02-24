@@ -136,7 +136,7 @@ class DualYearDataProcessor:
     def aggregate_grid_flows(self, od_df, grid_ids, use_raw=False):
         """
         Aggregate inflow and outflow for each grid over time
-        NEW: Aggregates to daily snapshots (7 days) instead of hourly (168 hours)
+        NEW: Aggregates to hourly snapshots (168 hours) for fine-grained temporal patterns
 
         Args:
             od_df: OD flow DataFrame
@@ -144,12 +144,12 @@ class DualYearDataProcessor:
             use_raw: If True, use raw num_total instead of normalized values
 
         Returns:
-            Dictionary mapping grid_id to temporal flow array (7, 2) - 7 days, [inflow, outflow]
+            Dictionary mapping grid_id to temporal flow array (168, 2) - 168 hours, [inflow, outflow]
         """
-        logger.info("Aggregating grid flows to daily snapshots")
+        logger.info("Aggregating grid flows to hourly snapshots")
 
-        # Number of days
-        num_days = config.TRAIN_DAYS  # 7 days
+        # Number of hours
+        num_hours = config.TRAIN_DAYS * 24  # 7 days * 24 hours = 168 hours
 
         grid_flows = {}
 
@@ -157,8 +157,8 @@ class DualYearDataProcessor:
         flow_column = 'num_total' if use_raw else 'num_total_normalized'
 
         for grid_id in tqdm(grid_ids, desc="Processing grids"):
-            # Initialize flow array for daily aggregation
-            daily_flow_array = np.zeros((num_days, 2))  # (7, [inflow, outflow])
+            # Initialize flow array for hourly aggregation
+            hourly_flow_array = np.zeros((num_hours, 2))  # (168, [inflow, outflow])
 
             # Get all inflow records (this grid as destination)
             inflow_df = od_df[od_df['d_grid_500'] == grid_id].copy()
@@ -166,28 +166,29 @@ class DualYearDataProcessor:
             # Get all outflow records (this grid as origin)
             outflow_df = od_df[od_df['o_grid_500'] == grid_id].copy()
 
-            # Aggregate by day
+            # Calculate hour index for each record
+            # hour_idx = day * 24 + hour
             if len(inflow_df) > 0:
-                # Group by date and sum across all hours
                 inflow_df['day_idx'] = (inflow_df['date_dt'] - inflow_df['date_dt'].min()).dt.days
-                daily_inflow = inflow_df.groupby('day_idx')[flow_column].sum()
+                inflow_df['hour_idx'] = inflow_df['day_idx'] * 24 + inflow_df['time']
+                hourly_inflow = inflow_df.groupby('hour_idx')[flow_column].sum()
 
-                for day_idx, flow_val in daily_inflow.items():
-                    if 0 <= day_idx < num_days:
-                        daily_flow_array[day_idx, 0] = flow_val
+                for hour_idx, flow_val in hourly_inflow.items():
+                    if 0 <= hour_idx < num_hours:
+                        hourly_flow_array[hour_idx, 0] = flow_val
 
             if len(outflow_df) > 0:
-                # Group by date and sum across all hours
                 outflow_df['day_idx'] = (outflow_df['date_dt'] - outflow_df['date_dt'].min()).dt.days
-                daily_outflow = outflow_df.groupby('day_idx')[flow_column].sum()
+                outflow_df['hour_idx'] = outflow_df['day_idx'] * 24 + outflow_df['time']
+                hourly_outflow = outflow_df.groupby('hour_idx')[flow_column].sum()
 
-                for day_idx, flow_val in daily_outflow.items():
-                    if 0 <= day_idx < num_days:
-                        daily_flow_array[day_idx, 1] = flow_val
+                for hour_idx, flow_val in hourly_outflow.items():
+                    if 0 <= hour_idx < num_hours:
+                        hourly_flow_array[hour_idx, 1] = flow_val
 
-            grid_flows[grid_id] = daily_flow_array
+            grid_flows[grid_id] = hourly_flow_array
 
-        logger.info(f"Aggregated flows to {num_days} daily snapshots per grid")
+        logger.info(f"Aggregated flows to {num_hours} hourly snapshots per grid")
         return grid_flows
 
     def log_transform_features(self, total, net_flow):

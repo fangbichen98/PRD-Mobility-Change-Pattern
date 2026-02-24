@@ -21,7 +21,7 @@ CHECKPOINT_DIR = "checkpoints"
 TRAIN_DAYS = 7  # Use first 7 days for training
 HOURS_PER_DAY = 24
 TRAIN_HOURS = TRAIN_DAYS * HOURS_PER_DAY  # 168 hours (for old model)
-TIME_STEPS = 7  # NEW: 7 daily snapshots (for improved model)
+TIME_STEPS = 168  # NEW: 168 hourly snapshots (hourly granularity)
 AGGREGATION_METHOD = 'sum'  # Time aggregation method
 
 # Feature parameters
