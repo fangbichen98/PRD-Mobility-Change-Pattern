@@ -40,9 +40,9 @@ LABEL_RANGE = (1, 9)
 
 # Model architecture parameters
 # Temporal branch (LSTM + SPP)
-LSTM_LAYERS = 2
-LSTM_HIDDEN_SIZE = 128
-LSTM_DROPOUT = 0.2
+LSTM_LAYERS = 3
+LSTM_HIDDEN_SIZE = 256
+LSTM_DROPOUT = 0.3
 SPP_LEVELS = [1, 2, 4]  # Spatial Pyramid Pooling levels (1x1, 2x2, 4x4)
 
 # Dynamic graph branch (DySAT)
@@ -76,8 +76,8 @@ ATTENTION_HEADS = 4
 # Training parameters
 BATCH_SIZE = 16  # Reduced from 32 to avoid GPU OOM with ellipse features
 LEARNING_RATE = 0.001
-NUM_EPOCHS = 100
-EARLY_STOPPING_PATIENCE = 15
+NUM_EPOCHS = 300
+EARLY_STOPPING_PATIENCE = 40
 WEIGHT_DECAY = 1e-5
 
 # Evaluation parameters
