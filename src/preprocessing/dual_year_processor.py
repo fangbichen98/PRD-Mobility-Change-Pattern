@@ -554,7 +554,10 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
         'norm_params_2021': dual_year_data['norm_params_2021'],
         'norm_params_2024': dual_year_data['norm_params_2024'],
         'label_df': label_df,
-        'class_weights': class_weights
+        'class_weights': class_weights,
+        'label_file_name': label_path,  # Store label file path
+        'label_file_hash': label_content_hash,  # Store label file hash
+        'class_distribution': class_counts.to_dict()  # Store class distribution
     }
 
     # Save to cache

@@ -29,7 +29,7 @@ from src.preprocessing.dual_year_processor import prepare_dual_year_experiment_d
 # Threshold 50: 119K-163K edges (OOM)
 # Threshold 60: 91K-133K edges (OOM)
 # Threshold 70: should be ~70K-100K edges
-config.FLOW_THRESHOLD = 70.0
+config.FLOW_THRESHOLD = 50.0
 from src.training.dataset_pure_graph import PureGraphDualYearDataset, PureGraphBatchCollator
 from src.models.dual_branch_model_pure_graph import PureGraphDualBranchModel
 
@@ -505,12 +505,18 @@ def main():
             'random_seed': config.RANDOM_SEED
         },
         'data_info': {
+            'label_file': data.get('label_file_name', 'N/A'),
+            'label_file_hash': data.get('label_file_hash', 'N/A'),
             'total_samples': len(data['labels']),
             'train_samples': len(train_dataset),
             'val_samples': len(val_dataset),
             'test_samples': len(test_dataset),
             'graph_2021_edges': int(data['graphs_2021'][0][0].shape[1]),
-            'graph_2024_edges': int(data['graphs_2024'][0][0].shape[1])
+            'graph_2024_edges': int(data['graphs_2024'][0][0].shape[1]),
+            'class_distribution': {
+                f'class_{i+1}': int(data.get('class_distribution', {}).get(i, 0))
+                for i in range(config.NUM_CLASSES)
+            }
         }
     }
 
@@ -528,6 +534,25 @@ def main():
     with open(f"{output_dir}/metrics/classification_report.txt", 'w') as f:
         f.write("9-Class Classification Report - Shenzhen Internal Mobility\n")
         f.write("=" * 80 + "\n\n")
+
+        # Write data information
+        f.write("Data Information:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"  Label File: {data.get('label_file_name', 'N/A')}\n")
+        f.write(f"  Label File Hash: {data.get('label_file_hash', 'N/A')}\n")
+        f.write("\n")
+
+        # Write class distribution
+        f.write("Class Distribution:\n")
+        f.write("-" * 80 + "\n")
+        class_dist = data.get('class_distribution', {})
+        for i in range(config.NUM_CLASSES):
+            count = class_dist.get(i, 0)
+            weight = data['class_weights'][i].item()
+            f.write(f"  Class {i+1}: {count} samples (weight: {weight:.4f})\n")
+        f.write("\n")
+
+        # Write configuration
         f.write("Configuration:\n")
         f.write("-" * 80 + "\n")
         f.write(f"  Flow Threshold: {config.FLOW_THRESHOLD}\n")
