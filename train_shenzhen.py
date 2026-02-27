@@ -250,7 +250,7 @@ def main():
     logger.info("=" * 80)
 
     data = prepare_dual_year_experiment_data(
-        label_path='data/labels_shenzhen_internal.csv',
+        label_path='data/labels_shenzhen_entropy.csv',
         samples_per_class=None,
         use_cache=True
     )
@@ -496,10 +496,37 @@ def main():
     test_results = {
         'test_accuracy': float(test_metrics['accuracy']),
         'test_f1': float(test_metrics['f1']),
-        'configuration': {
+        'data_config': {
             'flow_threshold': config.FLOW_THRESHOLD,
+            'time_steps': config.TIME_STEPS,
+            'time_steps_description': f'{config.TIME_STEPS // 24} days × 24 hours'
+        },
+        'model_architecture': {
+            'temporal_branch': {
+                'lstm_layers': config.LSTM_LAYERS,
+                'lstm_hidden_size': config.LSTM_HIDDEN_SIZE,
+                'lstm_dropout': config.LSTM_DROPOUT,
+                'temporal_input_size': config.TEMPORAL_INPUT_SIZE
+            },
+            'spatial_branch': {
+                'gat_layers': config.GAT_LAYERS,
+                'gat_hidden_size': config.GAT_HIDDEN_SIZE,
+                'gat_heads': config.GAT_HEADS
+            },
+            'fusion': {
+                'fusion_hidden_size': config.FUSION_HIDDEN_SIZE,
+                'attention_heads': config.ATTENTION_HEADS
+            },
+            'output': {
+                'num_classes': config.NUM_CLASSES
+            }
+        },
+        'training_config': {
             'batch_size': config.BATCH_SIZE,
             'learning_rate': config.LEARNING_RATE,
+            'weight_decay': config.WEIGHT_DECAY,
+            'num_epochs': config.NUM_EPOCHS,
+            'early_stopping_patience': config.EARLY_STOPPING_PATIENCE,
             'train_split': config.TRAIN_SPLIT,
             'val_split': config.VAL_SPLIT,
             'test_split': config.TEST_SPLIT,
@@ -554,14 +581,41 @@ def main():
         f.write("\n")
 
         # Write configuration
-        f.write("Configuration:\n")
+        f.write("Data Configuration:\n")
         f.write("-" * 80 + "\n")
         f.write(f"  Flow Threshold: {config.FLOW_THRESHOLD}\n")
-        f.write(f"  Batch Size: {config.BATCH_SIZE}\n")
-        f.write(f"  Learning Rate: {config.LEARNING_RATE}\n")
-        f.write(f"  Train/Val/Test Split: {config.TRAIN_SPLIT}/{config.VAL_SPLIT}/{config.TEST_SPLIT}\n")
+        f.write(f"  Time Steps: {config.TIME_STEPS} ({config.TIME_STEPS // 24} days × 24 hours)\n")
         f.write(f"  Graph 2021 Edges: {int(data['graphs_2021'][0][0].shape[1])}\n")
         f.write(f"  Graph 2024 Edges: {int(data['graphs_2024'][0][0].shape[1])}\n")
+        f.write("\n")
+
+        f.write("Model Architecture:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"  Temporal Branch:\n")
+        f.write(f"    - LSTM Layers: {config.LSTM_LAYERS}\n")
+        f.write(f"    - LSTM Hidden Size: {config.LSTM_HIDDEN_SIZE}\n")
+        f.write(f"    - LSTM Dropout: {config.LSTM_DROPOUT}\n")
+        f.write(f"    - Temporal Input Size: {config.TEMPORAL_INPUT_SIZE}\n")
+        f.write(f"  Spatial Branch:\n")
+        f.write(f"    - GAT Layers: {config.GAT_LAYERS}\n")
+        f.write(f"    - GAT Hidden Size: {config.GAT_HIDDEN_SIZE}\n")
+        f.write(f"    - GAT Heads: {config.GAT_HEADS}\n")
+        f.write(f"  Fusion:\n")
+        f.write(f"    - Fusion Hidden Size: {config.FUSION_HIDDEN_SIZE}\n")
+        f.write(f"    - Attention Heads: {config.ATTENTION_HEADS}\n")
+        f.write(f"  Output:\n")
+        f.write(f"    - Num Classes: {config.NUM_CLASSES}\n")
+        f.write("\n")
+
+        f.write("Training Configuration:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"  Batch Size: {config.BATCH_SIZE}\n")
+        f.write(f"  Learning Rate: {config.LEARNING_RATE}\n")
+        f.write(f"  Weight Decay: {config.WEIGHT_DECAY}\n")
+        f.write(f"  Num Epochs: {config.NUM_EPOCHS}\n")
+        f.write(f"  Early Stopping Patience: {config.EARLY_STOPPING_PATIENCE}\n")
+        f.write(f"  Train/Val/Test Split: {config.TRAIN_SPLIT}/{config.VAL_SPLIT}/{config.TEST_SPLIT}\n")
+        f.write(f"  Random Seed: {config.RANDOM_SEED}\n")
         f.write("\n")
         f.write("=" * 80 + "\n\n")
         f.write(report)
