@@ -42,7 +42,8 @@ LABEL_RANGE = (1, 9)
 # Temporal branch (LSTM + SPP)
 LSTM_LAYERS = 3
 LSTM_HIDDEN_SIZE = 256
-LSTM_DROPOUT = 0.3
+LSTM_DROPOUT = 0.4  # Increased from 0.3 to reduce overfitting
+DROPOUT = 0.4  # General dropout for all layers
 SPP_LEVELS = [1, 2, 4]  # Spatial Pyramid Pooling levels (1x1, 2x2, 4x4)
 
 # Dynamic graph branch (DySAT)
@@ -75,10 +76,11 @@ ATTENTION_HEADS = 4
 
 # Training parameters
 BATCH_SIZE = 16  # Reduced from 32 to avoid GPU OOM with ellipse features
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0001  # Reduced from 0.001 for more stable convergence
 NUM_EPOCHS = 300
 EARLY_STOPPING_PATIENCE = 40
-WEIGHT_DECAY = 1e-5
+WEIGHT_DECAY = 5e-4  # Increased from 1e-5 for stronger regularization
+GRAD_CLIP_NORM = 0.5  # Gradient clipping for stability (reduced from 1.0)
 
 # Evaluation parameters
 TRAIN_SPLIT = 0.7
