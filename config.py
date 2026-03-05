@@ -1,94 +1,107 @@
 """
 Configuration file for mobility pattern analysis model
+Multi-Scale Temporal Branch Training
+
+This config file contains ONLY the parameters used in train_multiscale_temporal.py
+Last updated: 2026-03-05
 """
 import os
 
-# Data paths
+# ==============================================================================
+# DATA PATHS
+# ==============================================================================
+# These paths are used by dual_year_processor.py (called by train_multiscale_temporal.py)
 DATA_DIR = "data"
-OD_2021_PATH = os.path.join(DATA_DIR, "2021_week.csv")
-OD_2024_PATH = os.path.join(DATA_DIR, "2024_week.csv")
-GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "PRD_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "labels.csv")
+OD_2021_PATH = os.path.join(DATA_DIR, "2021_sgh_week.csv")
+OD_2024_PATH = os.path.join(DATA_DIR, "2024_sgh_week.csv")
+GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "sgh_grid_metadata.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "label_sgh.csv")
 
-# Output paths
-OUTPUT_DIR = "outputs"
-MODEL_DIR = os.path.join(OUTPUT_DIR, "models")
-LOG_DIR = os.path.join(OUTPUT_DIR, "logs")
-FIGURE_DIR = os.path.join(OUTPUT_DIR, "figures")
-CHECKPOINT_DIR = "checkpoints"
-
-# Data preprocessing parameters
+# ==============================================================================
+# DATA PREPROCESSING
+# ==============================================================================
 TRAIN_DAYS = 7  # Use first 7 days for training
-HOURS_PER_DAY = 24
-TRAIN_HOURS = TRAIN_DAYS * HOURS_PER_DAY  # 168 hours (for old model)
-TIME_STEPS = 168  # NEW: 168 hourly snapshots (hourly granularity)
-AGGREGATION_METHOD = 'sum'  # Time aggregation method
+TIME_STEPS = 168  # 168 hourly snapshots (7 days × 24 hours)
+FLOW_THRESHOLD = 5.0  # Minimum flow to create edge in graph construction (lowered from 10.0 for more edges)
 
-# Feature parameters
-TEMPORAL_INPUT_SIZE = 1  # [total_log] - only total flow for temporal branch
-SPATIAL_INPUT_SIZE = 2   # [eccentricity, log_area] - ellipse features for spatial branch
-NORMALIZATION = 'log'  # 'log', 'none', 'zscore'
-USE_LOG_TRANSFORM = True
-
-# Coordinate validation ranges
+# Coordinate validation ranges (used by data_processor.py)
 LON_RANGE = (-180, 180)
 LAT_RANGE = (-90, 90)
 
-# Label parameters
-NUM_CLASSES = 9  # 9 types of mobility change patterns
-LABEL_RANGE = (1, 9)
+# ==============================================================================
+# DATA SPLIT
+# ==============================================================================
+TRAIN_SPLIT = 0.7  # Training set ratio
+VAL_SPLIT = 0.1    # Validation set ratio
+TEST_SPLIT = 0.2   # Test set ratio
+RANDOM_SEED = 42   # Random seed for reproducibility
 
-# Model architecture parameters
-# Temporal branch (LSTM + SPP)
-LSTM_LAYERS = 3
-LSTM_HIDDEN_SIZE = 256
-LSTM_DROPOUT = 0.4  # Increased from 0.3 to reduce overfitting
-DROPOUT = 0.4  # General dropout for all layers
-SPP_LEVELS = [1, 2, 4]  # Spatial Pyramid Pooling levels (1x1, 2x2, 4x4)
+# ==============================================================================
+# MODEL ARCHITECTURE - TEMPORAL BRANCH
+# ==============================================================================
+# Multi-Scale Temporal Branch (LSTM-based)
+TEMPORAL_INPUT_SIZE = 1  # Input feature dimension: [total_log]
+LSTM_LAYERS = 3          # Number of LSTM layers
+LSTM_HIDDEN_SIZE = 256   # LSTM hidden units
+LSTM_DROPOUT = 0.4       # LSTM dropout rate
 
-# Dynamic graph branch (DySAT)
-DYSAT_LAYERS = 3
-DYSAT_HIDDEN_SIZE = 64
-DYSAT_HEADS = 2  # Number of attention heads
-DYSAT_DROPOUT = 0.2
-TIME_WINDOW = 24  # 24-hour sliding window (for old model)
+# ==============================================================================
+# MODEL ARCHITECTURE - SPATIAL BRANCH
+# ==============================================================================
+# Pure Graph GAT Branch
+GAT_LAYERS = 3           # Number of GAT layers
+GAT_HIDDEN_SIZE = 128    # GAT hidden units per head
+GAT_HEADS = 4            # Number of attention heads
 
-# Graph construction mode
-USE_STATIC_GRAPH = True  # Use static aggregated graphs instead of dynamic
-USE_FLOW_ONLY_GRAPH = True  # Use flow-only graphs, not hybrid k-NN
+# ==============================================================================
+# MODEL ARCHITECTURE - FUSION & CLASSIFICATION
+# ==============================================================================
+# Gated Feature Fusion
+FUSION_HIDDEN_SIZE = 256  # Fusion layer hidden size
+ATTENTION_HEADS = 4       # Number of attention heads in fusion
+NUM_CLASSES = 9           # Number of output classes (9 mobility patterns)
 
-# Flow graph configuration
-FLOW_THRESHOLD = 10.0  # Minimum flow to create edge
-                       # Recommended values:
-                       # - 5: Aggressive (~28,563 edges)
-                       # - 10: Balanced (~10,956 edges) - RECOMMENDED
-                       # - 20: Conservative (~3,553 edges)
+# ==============================================================================
+# TRAINING HYPERPARAMETERS
+# ==============================================================================
+BATCH_SIZE = 16           # Batch size for training
+LEARNING_RATE = 0.0001    # Initial learning rate
+WEIGHT_DECAY = 5e-4       # L2 regularization
+NUM_EPOCHS = 300          # Maximum number of training epochs
+EARLY_STOPPING_PATIENCE = 40  # Stop if no improvement for N epochs
 
-# Spatial branch configuration
-SPATIAL_BRANCH_TYPE = 'gat'  # 'dysat' or 'gat'
-GAT_HIDDEN_SIZE = 128
-GAT_LAYERS = 3
-GAT_HEADS = 4
+# ==============================================================================
+# CONFIGURATION SUMMARY
+# ==============================================================================
+"""
+Total parameters: 22
 
-# Fusion layer
-FUSION_HIDDEN_SIZE = 256
-ATTENTION_HEADS = 4
+Used in train_multiscale_temporal.py:
+1. LABEL_PATH           - Label file path
+2. TIME_STEPS           - Temporal sequence length
+3. FLOW_THRESHOLD       - Graph construction threshold
+4. TRAIN_SPLIT          - Train/validation/test split
+5. VAL_SPLIT
+6. TEST_SPLIT
+7. RANDOM_SEED
+8. BATCH_SIZE           - Training batch size
+9. LEARNING_RATE        - Optimizer learning rate
+10. WEIGHT_DECAY        - L2 regularization
+11. NUM_EPOCHS          - Max training epochs
+12. EARLY_STOPPING_PATIENCE
+13. TEMPORAL_INPUT_SIZE - Input feature dimension
+14. FUSION_HIDDEN_SIZE  - Fusion layer size
+15. NUM_CLASSES         - Output classes
+16. LSTM_LAYERS         - Temporal branch architecture
+17. LSTM_HIDDEN_SIZE
+18. LSTM_DROPOUT
+19. GAT_LAYERS          - Spatial branch architecture
+20. GAT_HIDDEN_SIZE
+21. GAT_HEADS
+22. ATTENTION_HEADS     - Fusion layer architecture
 
-# Training parameters
-BATCH_SIZE = 16  # Reduced from 32 to avoid GPU OOM with ellipse features
-LEARNING_RATE = 0.0001  # Reduced from 0.001 for more stable convergence
-NUM_EPOCHS = 300
-EARLY_STOPPING_PATIENCE = 40
-WEIGHT_DECAY = 5e-4  # Increased from 1e-5 for stronger regularization
-GRAD_CLIP_NORM = 0.5  # Gradient clipping for stability (reduced from 1.0)
-
-# Evaluation parameters
-TRAIN_SPLIT = 0.7
-VAL_SPLIT = 0.1
-TEST_SPLIT = 0.2
-RANDOM_SEED = 42
-
-# Visualization parameters
-FIGURE_DPI = 300
-FIGURE_FORMAT = "jpg"
-HEATMAP_CMAP = "YlOrRd"
+Paths used by dual_year_processor.py:
+- OD_2021_PATH
+- OD_2024_PATH
+- GRID_METADATA_PATH
+"""

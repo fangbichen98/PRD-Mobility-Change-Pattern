@@ -114,6 +114,14 @@ def train_epoch(model, train_loader, criterion, optimizer, device, accumulation_
     }
 
 
+def format_time(seconds):
+    """Format seconds into readable time string"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 @torch.no_grad()
 def evaluate(model, data_loader, criterion, device):
     """Evaluate model"""
@@ -198,10 +206,11 @@ def main():
     logger.info(f"Training started at: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("\nImprovement: Multi-Scale Temporal Branch (hourly + daily + weekly)")
     logger.info("Expected: +3-5% accuracy")
+    logger.info("Dataset: label_sgh.csv (Shenzhen grids)")
 
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = f"outputs/multiscale_temporal_{timestamp}"
+    output_dir = f"outputs/multiscale_temporal_sgh_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(f"{output_dir}/models", exist_ok=True)
     os.makedirs(f"{output_dir}/metrics", exist_ok=True)
@@ -220,7 +229,7 @@ def main():
     logger.info("=" * 80)
 
     data = prepare_dual_year_experiment_data(
-        label_path='data/labels_shenzhen_entropy.csv',
+        label_path=config.LABEL_PATH,
         samples_per_class=None,
         use_cache=True
     )
@@ -455,37 +464,180 @@ def main():
     logger.info(f"  - Accuracy: {test_metrics['accuracy']:.2f}%")
     logger.info(f"  - F1 Score: {test_metrics['f1']:.4f}")
 
-    # Save test results
+    # Save test results with detailed configuration
     test_results = {
         'test_accuracy': float(test_metrics['accuracy']),
         'test_f1': float(test_metrics['f1']),
         'improvement': 'Multi-Scale Temporal Branch',
+        'data_config': {
+            'flow_threshold': config.FLOW_THRESHOLD,
+            'time_steps': config.TIME_STEPS,
+            'time_steps_description': f'{config.TIME_STEPS // 24} days × 24 hours'
+        },
         'model_architecture': {
-            'temporal_branch': 'Multi-scale (hourly + daily + weekly)',
-            'spatial_branch': 'Pure Graph GAT',
-            'fusion': 'Gated'
+            'temporal_branch': {
+                'type': 'Multi-scale (hourly + daily + weekly)',
+                'lstm_layers': config.LSTM_LAYERS,
+                'lstm_hidden_size': config.LSTM_HIDDEN_SIZE,
+                'lstm_dropout': config.LSTM_DROPOUT,
+                'temporal_input_size': config.TEMPORAL_INPUT_SIZE
+            },
+            'spatial_branch': {
+                'type': 'Pure Graph GAT',
+                'gat_layers': config.GAT_LAYERS,
+                'gat_hidden_size': config.GAT_HIDDEN_SIZE,
+                'gat_heads': config.GAT_HEADS
+            },
+            'fusion': {
+                'type': 'Gated Fusion',
+                'fusion_hidden_size': config.FUSION_HIDDEN_SIZE,
+                'attention_heads': config.ATTENTION_HEADS
+            },
+            'output': {
+                'num_classes': config.NUM_CLASSES
+            }
         },
         'training_config': {
             'batch_size': config.BATCH_SIZE,
             'learning_rate': config.LEARNING_RATE,
             'weight_decay': config.WEIGHT_DECAY,
+            'num_epochs': config.NUM_EPOCHS,
+            'early_stopping_patience': config.EARLY_STOPPING_PATIENCE,
+            'train_split': config.TRAIN_SPLIT,
+            'val_split': config.VAL_SPLIT,
+            'test_split': config.TEST_SPLIT,
+            'random_seed': config.RANDOM_SEED,
             'dropout': 0.2
+        },
+        'data_info': {
+            'label_file': data.get('label_file_name', 'N/A'),
+            'label_file_hash': data.get('label_file_hash', 'N/A'),
+            'total_samples': len(data['labels']),
+            'train_samples': len(train_dataset),
+            'val_samples': len(val_dataset),
+            'test_samples': len(test_dataset),
+            'graph_2021_edges': int(data['graphs_2021'][0][0].shape[1]),
+            'graph_2024_edges': int(data['graphs_2024'][0][0].shape[1]),
+            'class_distribution': {
+                f'class_{i+1}': int(data.get('class_distribution', {}).get(i, 0))
+                for i in range(config.NUM_CLASSES)
+            }
         }
     }
 
     with open(f"{output_dir}/metrics/test_results.json", 'w') as f:
         json.dump(test_results, f, indent=2)
 
-    logger.info(f"\n✓ Results saved to {output_dir}")
+    # Save classification report
+    report = classification_report(
+        test_metrics['all_labels'],
+        test_metrics['all_preds'],
+        target_names=[f'Class {i+1}' for i in range(9)],
+        zero_division=0
+    )
 
-    # Timing info
+    with open(f"{output_dir}/metrics/classification_report.txt", 'w') as f:
+        f.write("9-Class Classification Report - Multi-Scale Temporal Branch\n")
+        f.write("=" * 80 + "\n\n")
+
+        # Write data information
+        f.write("Data Information:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"  Label File: {data.get('label_file_name', 'N/A')}\n")
+        f.write(f"  Label File Hash: {data.get('label_file_hash', 'N/A')}\n")
+        f.write("\n")
+
+        # Write class distribution
+        f.write("Class Distribution:\n")
+        f.write("-" * 80 + "\n")
+        class_dist = data.get('class_distribution', {})
+        for i in range(config.NUM_CLASSES):
+            count = class_dist.get(i, 0)
+            weight = data['class_weights'][i].item()
+            f.write(f"  Class {i+1}: {count} samples (weight: {weight:.4f})\n")
+        f.write("\n")
+
+        # Write configuration
+        f.write("Data Configuration:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"  Flow Threshold: {config.FLOW_THRESHOLD}\n")
+        f.write(f"  Time Steps: {config.TIME_STEPS} ({config.TIME_STEPS // 24} days × 24 hours)\n")
+        f.write(f"  Graph 2021 Edges: {int(data['graphs_2021'][0][0].shape[1])}\n")
+        f.write(f"  Graph 2024 Edges: {int(data['graphs_2024'][0][0].shape[1])}\n")
+        f.write("\n")
+
+        f.write("Model Architecture:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"  Temporal Branch:\n")
+        f.write(f"    - Type: Multi-scale (hourly + daily + weekly)\n")
+        f.write(f"    - LSTM Layers: {config.LSTM_LAYERS}\n")
+        f.write(f"    - LSTM Hidden Size: {config.LSTM_HIDDEN_SIZE}\n")
+        f.write(f"    - LSTM Dropout: {config.LSTM_DROPOUT}\n")
+        f.write(f"    - Temporal Input Size: {config.TEMPORAL_INPUT_SIZE}\n")
+        f.write(f"  Spatial Branch:\n")
+        f.write(f"    - Type: Pure Graph GAT\n")
+        f.write(f"    - GAT Layers: {config.GAT_LAYERS}\n")
+        f.write(f"    - GAT Hidden Size: {config.GAT_HIDDEN_SIZE}\n")
+        f.write(f"    - GAT Heads: {config.GAT_HEADS}\n")
+        f.write(f"  Fusion:\n")
+        f.write(f"    - Type: Gated Fusion\n")
+        f.write(f"    - Fusion Hidden Size: {config.FUSION_HIDDEN_SIZE}\n")
+        f.write(f"    - Attention Heads: {config.ATTENTION_HEADS}\n")
+        f.write(f"  Output:\n")
+        f.write(f"    - Num Classes: {config.NUM_CLASSES}\n")
+        f.write("\n")
+
+        f.write("Training Configuration:\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"  Batch Size: {config.BATCH_SIZE}\n")
+        f.write(f"  Learning Rate: {config.LEARNING_RATE}\n")
+        f.write(f"  Weight Decay: {config.WEIGHT_DECAY}\n")
+        f.write(f"  Num Epochs: {config.NUM_EPOCHS}\n")
+        f.write(f"  Early Stopping Patience: {config.EARLY_STOPPING_PATIENCE}\n")
+        f.write(f"  Train/Val/Test Split: {config.TRAIN_SPLIT}/{config.VAL_SPLIT}/{config.TEST_SPLIT}\n")
+        f.write(f"  Random Seed: {config.RANDOM_SEED}\n")
+        f.write(f"  Dropout: 0.2\n")
+        f.write("\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(report)
+
+    # Save confusion matrix
+    cm = confusion_matrix(test_metrics['all_labels'], test_metrics['all_preds'])
+    np.save(f"{output_dir}/metrics/confusion_matrix.npy", cm)
+
+    logger.info(f"\n✓ All results saved to {output_dir}/metrics/")
+    logger.info("  - test_results.json")
+    logger.info("  - classification_report.txt")
+    logger.info("  - confusion_matrix.npy")
+
+    # Calculate and log total training time
     end_time = time.time()
+    end_datetime = datetime.now()
     total_time = end_time - start_time
 
     logger.info("\n" + "=" * 80)
     logger.info("Training Time Statistics")
     logger.info("=" * 80)
-    logger.info(f"Total time: {total_time/3600:.2f} hours")
+    logger.info(f"Start time:    {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"End time:      {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Total time:    {format_time(total_time)} ({total_time:.2f} seconds)")
+    logger.info(f"               ({total_time/60:.2f} minutes, {total_time/3600:.2f} hours)")
+    logger.info("=" * 80)
+
+    # Save timing information to file
+    timing_info = {
+        "start_time": start_datetime.strftime('%Y-%m-%d %H:%M:%S'),
+        "end_time": end_datetime.strftime('%Y-%m-%d %H:%M:%S'),
+        "total_time_seconds": total_time,
+        "total_time_formatted": format_time(total_time),
+        "total_time_minutes": total_time / 60,
+        "total_time_hours": total_time / 3600
+    }
+
+    with open(f"{output_dir}/metrics/timing_info.json", 'w') as f:
+        json.dump(timing_info, f, indent=2)
+
+    logger.info(f"✓ Timing info saved to {output_dir}/metrics/timing_info.json")
     logger.info("=" * 80)
 
 
