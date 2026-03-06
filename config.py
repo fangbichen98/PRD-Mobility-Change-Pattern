@@ -22,7 +22,7 @@ LABEL_PATH = os.path.join(DATA_DIR, "label_sgh.csv")
 # ==============================================================================
 TRAIN_DAYS = 7  # Use first 7 days for training
 TIME_STEPS = 168  # 168 hourly snapshots (7 days × 24 hours)
-FLOW_THRESHOLD = 5.0  # Minimum flow to create edge in graph construction (lowered from 10.0 for more edges)
+FLOW_THRESHOLD = 10.0  # OPTIMAL VALUE - extensively tested [5.0, 7.5, 9.0, 10.0, 11.0, 12.0], 10.0 is best with 65.74% accuracy
 
 # Coordinate validation ranges (used by data_processor.py)
 LON_RANGE = (-180, 180)

@@ -192,7 +192,11 @@ class AlternativeEnhancedModel(nn.Module):
         )
 
     def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, num_nodes, node_indices=None):
-        """Forward pass"""
+        """
+        Forward pass
+
+        FIXED: Now properly extracts separate 2021/2024 features and computes temporal difference
+        """
         # Extract batch features
         if node_indices is not None:
             x_2021_batch = x_2021[node_indices]
@@ -201,16 +205,28 @@ class AlternativeEnhancedModel(nn.Module):
             x_2021_batch = x_2021
             x_2024_batch = x_2024
 
-        # Multi-scale temporal features (already includes multi-year processing)
-        temporal_features = self.temporal_branch(x_2021_batch, x_2024_batch)
-        # Returns: (batch_size, hidden_size)
+        # FIX: Extract multi-scale features for each year separately
+        # Using the methods from MultiScaleTemporalBranch
+        temporal_2021_list = []
+        temporal_2024_list = []
 
-        # Expand to 3 features for consistency
-        temporal_2021 = temporal_features  # Simplified
-        temporal_2024 = temporal_features  # Simplified
-        temporal_diff = temporal_features * 0  # Zero diff for now
+        for x, year_list in [(x_2021_batch, temporal_2021_list), (x_2024_batch, temporal_2024_list)]:
+            # Extract hourly features
+            h_hourly = self.temporal_branch.extract_hourly_features(x)
+            # Extract daily features
+            h_daily = self.temporal_branch.extract_daily_features(x)
+            # Extract weekly features
+            h_weekly = self.temporal_branch.extract_weekly_features(x)
 
-        temporal_stack = torch.stack([temporal_2021, temporal_2024, temporal_diff], dim=1)
+            # Stack multi-scale features
+            multi_scale = torch.stack([h_hourly, h_daily, h_weekly], dim=1)
+            year_list.append(multi_scale)
+
+        # Compute proper temporal difference (FIXED: was temporal_features * 0)
+        temporal_diff = temporal_2024_list[0] - temporal_2021_list[0]
+
+        # Stack temporal features: (batch_size, 3, hidden_size)
+        temporal_stack = torch.cat([temporal_2021_list[0], temporal_2024_list[0], temporal_diff], dim=1)
 
         # Spatial features
         spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
@@ -236,15 +252,19 @@ class AlternativeEnhancedModel(nn.Module):
 
 # Monkey-patch SimplifiedMultiScaleTemporal to add extract_features_single method
 def extract_features_single(self, x):
-    """Extract features from a single year's time series"""
-    # Process hourly
-    _, (h_n, _) = self.lstm(x)
-    h_hourly = self.proj_hidden(h_n[-1])
+    """
+    Extract features from a single year's time series
 
-    # Process daily
+    FIXED: Now uses separate LSTMs for hourly and daily processing
+    """
+    # Process hourly with dedicated LSTM
+    _, (h_hourly_n, _) = self.lstm_hourly(x)
+    h_hourly = self.proj_hourly(h_hourly_n[-1])
+
+    # Process daily with dedicated LSTM
     x_daily = x.view(x.size(0), 7, 24, x.size(2)).mean(dim=2)
-    _, (h_daily_n, _) = self.lstm(x_daily)
-    h_daily = self.proj_hidden(h_daily_n[-1])
+    _, (h_daily_n, _) = self.lstm_daily(x_daily)
+    h_daily = self.proj_daily(h_daily_n[-1])
 
     # Weekly stats
     mean = x.mean(dim=1)
@@ -274,9 +294,9 @@ if __name__ == "__main__":
     input_size = 1
     hidden_size = 256
 
-    # Dummy data
-    x_2021 = torch.randn(batch_size, timesteps, input_size)
-    x_2024 = torch.randn(batch_size, timesteps, input_size)
+    # FIX: Create full graph features (num_nodes, timesteps, input_size)
+    x_2021 = torch.randn(num_nodes, timesteps, input_size)
+    x_2024 = torch.randn(num_nodes, timesteps, input_size)
 
     # Dummy graphs
     edge_index = torch.randint(0, num_nodes, (2, 1000))
@@ -284,6 +304,7 @@ if __name__ == "__main__":
     graphs_2021 = [(edge_index, edge_attr)]
     graphs_2024 = [(edge_index, edge_attr)]
 
+    # FIX: Create valid node indices for batch extraction
     node_indices = torch.randint(0, num_nodes, (batch_size,))
 
     # Test EnhancedDualBranchModel

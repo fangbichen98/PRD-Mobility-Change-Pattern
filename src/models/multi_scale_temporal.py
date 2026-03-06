@@ -216,7 +216,7 @@ class SimplifiedMultiScaleTemporal(nn.Module):
     Simplified version with reduced parameters for faster training.
 
     Uses:
-    - Single LSTM for both scales
+    - Separate LSTMs for hourly and daily scales (FIXED: no longer sharing LSTM)
     - Simpler weekly aggregation
     - Fewer parameters
     """
@@ -224,8 +224,16 @@ class SimplifiedMultiScaleTemporal(nn.Module):
     def __init__(self, input_size=1, hidden_size=256, lstm_hidden=128, dropout=0.4):
         super().__init__()
 
-        # Shared LSTM for both scales
-        self.lstm = nn.LSTM(
+        # FIX: Separate LSTMs for different scales to avoid sequence length mismatch
+        self.lstm_hourly = nn.LSTM(
+            input_size=input_size,
+            hidden_size=lstm_hidden,
+            num_layers=2,
+            batch_first=True,
+            dropout=dropout
+        )
+
+        self.lstm_daily = nn.LSTM(
             input_size=input_size,
             hidden_size=lstm_hidden,
             num_layers=2,
@@ -234,7 +242,8 @@ class SimplifiedMultiScaleTemporal(nn.Module):
         )
 
         # Projections
-        self.proj_hidden = nn.Linear(lstm_hidden, hidden_size)
+        self.proj_hourly = nn.Linear(lstm_hidden, hidden_size)
+        self.proj_daily = nn.Linear(lstm_hidden, hidden_size)
 
         # Weekly statistics
         self.weekly_net = nn.Sequential(
@@ -257,19 +266,20 @@ class SimplifiedMultiScaleTemporal(nn.Module):
             x_2021, x_2024: (batch, 168, input_size)
 
         Returns:
-            output: (batch, hidden_size)
+            output: (batch, 3, hidden_size) - [2021_features, 2024_features, diff]
         """
-        all_features = []
+        # Process each year separately and fuse multi-scale features
+        yearly_features = []
 
         for x in [x_2021, x_2024]:
-            # Process hourly
-            _, (h_n, _) = self.lstm(x)
-            h_hourly = self.proj_hidden(h_n[-1])
+            # Process hourly with dedicated LSTM
+            _, (h_hourly_n, _) = self.lstm_hourly(x)
+            h_hourly = self.proj_hourly(h_hourly_n[-1])
 
-            # Process daily (average over 24 hours)
+            # Process daily (average over 24 hours) with dedicated LSTM
             x_daily = x.view(x.size(0), 7, 24, x.size(2)).mean(dim=2)
-            _, (h_daily_n, _) = self.lstm(x_daily)
-            h_daily = self.proj_hidden(h_daily_n[-1])
+            _, (h_daily_n, _) = self.lstm_daily(x_daily)
+            h_daily = self.proj_daily(h_daily_n[-1])
 
             # Weekly stats
             mean = x.mean(dim=1)
@@ -278,16 +288,16 @@ class SimplifiedMultiScaleTemporal(nn.Module):
             stats = torch.cat([mean, std, trend], dim=1)
             h_weekly = self.weekly_net(stats)
 
-            # Concatenate scales
+            # Fuse multi-scale features for this year
             multi_scale = torch.cat([h_hourly, h_daily, h_weekly], dim=1)
-            all_features.append(multi_scale)
+            fused_year = self.fusion(multi_scale)
+            yearly_features.append(fused_year)
 
-        # Compute difference
-        diff = all_features[1] - all_features[0]
+        # Compute difference between years
+        diff = yearly_features[1] - yearly_features[0]
 
-        # Fuse all features
-        combined = torch.cat([all_features[0], all_features[1], diff], dim=1)
-        output = self.fusion(combined)
+        # Stack: [2021_fused, 2024_fused, diff] -> (batch, 3, hidden_size)
+        output = torch.stack([yearly_features[0], yearly_features[1], diff], dim=1)
 
         return output
 

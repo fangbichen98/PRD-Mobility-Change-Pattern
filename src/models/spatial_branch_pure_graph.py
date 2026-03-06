@@ -46,6 +46,11 @@ class PureGraphDualYearGAT(nn.Module):
         self.dropout_rate = dropout
         self.output_size = output_size
 
+        # FIX: Cache for storing computed graph embeddings
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
         # GAT layers
         # Input: structural features (3 dims: in_degree, out_degree, total_degree)
         self.gat_layers = nn.ModuleList()
@@ -158,9 +163,22 @@ class PureGraphDualYearGAT(nn.Module):
 
         return h_out
 
+    def clear_cache(self):
+        """
+        Clear cached embeddings
+
+        Should be called:
+        - Before training starts
+        - When graph structure changes
+        - When switching between train/eval modes
+        """
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
     def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None):
         """
-        Forward pass for both years
+        Forward pass for both years with caching support
 
         Args:
             graphs_2021: List with single (edge_index, edge_attr) tuple for 2021
@@ -181,11 +199,24 @@ class PureGraphDualYearGAT(nn.Module):
         edge_attr_2021 = edge_attr_2021.float()
         edge_attr_2024 = edge_attr_2024.float()
 
-        # Process 2021 with static flow graph
-        h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes)
+        # FIX: Use caching to avoid redundant computation
+        # During training mode, always recompute (gradients needed)
+        # During evaluation mode, use cache if available
+        if self.training or not self._cache_valid:
+            # Process 2021 with static flow graph
+            h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes)
+            # Process 2024 with static flow graph
+            h_2024 = self.process_year(edge_index_2024, edge_attr_2024, num_nodes)
 
-        # Process 2024 with static flow graph
-        h_2024 = self.process_year(edge_index_2024, edge_attr_2024, num_nodes)
+            # Cache the results (detach to save memory during eval)
+            if not self.training:
+                self._cached_2021 = h_2021.detach()
+                self._cached_2024 = h_2024.detach()
+                self._cache_valid = True
+        else:
+            # Use cached embeddings
+            h_2021 = self._cached_2021
+            h_2024 = self._cached_2024
 
         # Compute difference (spatial change pattern)
         diff = h_2024 - h_2021

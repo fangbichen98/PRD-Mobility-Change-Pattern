@@ -64,22 +64,29 @@ class SpatialGraphBuilder:
 
         return edge_index, edge_weights
 
-    def build_flow_graph(self, od_df: pd.DataFrame, threshold: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
+    def build_flow_graph(self, od_df: pd.DataFrame, threshold: float = 1.0,
+                        include_neighbors: bool = True) -> Tuple[np.ndarray, np.ndarray]:
         """
         Build graph based on OD flow patterns
 
         CRITICAL FIX: Use raw num_total values instead of normalized values.
         Edge weights should represent actual connection strength (non-negative).
 
+        NEW: If include_neighbors=True, include nodes connected to labeled grids even if they
+        don't have labels themselves. This provides spatial context for GAT.
+
         Args:
             od_df: OD flow DataFrame
             threshold: Minimum raw flow to create edge (default 0 to include all positive flows)
+            include_neighbors: If True, include neighbors of labeled grids (default: True)
 
         Returns:
             edge_index: Edge indices (2, num_edges)
             edge_weights: Edge weights based on flow volume (non-negative)
         """
         logger.info(f"Building flow graph with threshold={threshold} (using raw flow values)")
+        if include_neighbors:
+            logger.info("Including neighbors of labeled grids for spatial context")
 
         # Use raw num_total instead of normalized values
         flow_column = 'num_total' if 'num_total' in od_df.columns else 'num_total_normalized'
@@ -87,6 +94,10 @@ class SpatialGraphBuilder:
         # Aggregate flows between grid pairs
         flow_agg = od_df.groupby(['o_grid_500', 'd_grid_500'])[flow_column].sum().reset_index()
         flow_agg = flow_agg[flow_agg[flow_column] > threshold]  # Only positive flows
+
+        # Dynamic node expansion: track all nodes that should be in the graph
+        expanded_grid_ids = set(self.grid_id_to_idx.keys())
+        initial_node_count = len(expanded_grid_ids)
 
         # Convert grid IDs to indices
         edge_list = []
@@ -96,17 +107,66 @@ class SpatialGraphBuilder:
             o_grid = row['o_grid_500']
             d_grid = row['d_grid_500']
 
-            if o_grid in self.grid_id_to_idx and d_grid in self.grid_id_to_idx:
-                o_idx = self.grid_id_to_idx[o_grid]
-                d_idx = self.grid_id_to_idx[d_grid]
+            # NEW: Include edge if at least one endpoint is a labeled grid
+            # This adds neighbors (unlabeled grids) to provide spatial context
+            if include_neighbors:
+                should_include = (o_grid in self.grid_id_to_idx) or (d_grid in self.grid_id_to_idx)
+            else:
+                should_include = (o_grid in self.grid_id_to_idx) and (d_grid in self.grid_id_to_idx)
 
-                edge_list.append([o_idx, d_idx])
+            if should_include:
+                # Add nodes to expanded set if not already present
+                if o_grid not in expanded_grid_ids:
+                    expanded_grid_ids.add(o_grid)
+                if d_grid not in expanded_grid_ids:
+                    expanded_grid_ids.add(d_grid)
+
+                edge_list.append((o_grid, d_grid))
                 edge_weights.append(row[flow_column])
 
-        edge_index = np.array(edge_list).T if edge_list else np.zeros((2, 0))
-        edge_weights = np.array(edge_weights) if edge_weights else np.array([])
+        # Create new grid_id_to_idx mapping with expanded nodes
+        # IMPORTANT: Preserve original indices for labeled grids
+        new_grid_id_to_idx = {}
+        new_idx_to_grid_id = {}
+        next_idx = 0
 
-        logger.info(f"Created flow graph with {len(edge_list)} edges")
+        # First, add original labeled grids (preserve their indices if possible)
+        for grid_id in self.grid_id_to_idx.keys():
+            new_grid_id_to_idx[grid_id] = next_idx
+            new_idx_to_grid_id[next_idx] = grid_id
+            next_idx += 1
+
+        # Then, add newly discovered neighbor grids
+        newly_added = []
+        for grid_id in expanded_grid_ids:
+            if grid_id not in new_grid_id_to_idx:
+                new_grid_id_to_idx[grid_id] = next_idx
+                new_idx_to_grid_id[next_idx] = grid_id
+                newly_added.append(grid_id)
+                next_idx += 1
+
+        # Update instance variables for future use
+        self.grid_id_to_idx = new_grid_id_to_idx
+        self.idx_to_grid_id = new_idx_to_grid_id
+
+        # Now convert edge list to indices
+        final_edge_list = []
+        final_edge_weights = []
+
+        for (o_grid, d_grid), weight in zip(edge_list, edge_weights):
+            o_idx = new_grid_id_to_idx[o_grid]
+            d_idx = new_grid_id_to_idx[d_grid]
+            final_edge_list.append([o_idx, d_idx])
+            final_edge_weights.append(weight)
+
+        edge_index = np.array(final_edge_list).T if final_edge_list else np.zeros((2, 0))
+        edge_weights = np.array(final_edge_weights) if final_edge_weights else np.array([])
+
+        logger.info(f"Created flow graph:")
+        logger.info(f"  - Original labeled grids: {initial_node_count}")
+        logger.info(f"  - Newly added neighbor grids: {len(newly_added)}")
+        logger.info(f"  - Total nodes: {len(new_grid_id_to_idx)}")
+        logger.info(f"  - Total edges: {len(final_edge_list)}")
 
         return edge_index, edge_weights
 

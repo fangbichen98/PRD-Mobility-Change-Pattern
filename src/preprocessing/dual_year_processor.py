@@ -26,8 +26,8 @@ class DualYearDataProcessor:
         """
         self.year1 = year1
         self.year2 = year2
-        self.data_path_1 = f'data/{year1}.csv'
-        self.data_path_2 = f'data/{year2}.csv'
+        self.data_path_1 = config.OD_2021_PATH
+        self.data_path_2 = config.OD_2024_PATH
 
     def load_year_data(self, year, sampled_grid_ids, chunksize=500000):
         """
@@ -41,8 +41,15 @@ class DualYearDataProcessor:
         Returns:
             DataFrame with OD flow data
         """
-        data_path = f'data/{year}.csv'
-        logger.info(f"Loading OD flow data for {year}...")
+        # Use config paths based on year
+        if year == self.year1:
+            data_path = self.data_path_1
+        elif year == self.year2:
+            data_path = self.data_path_2
+        else:
+            raise ValueError(f"Year {year} not recognized. Expected {self.year1} or {self.year2}.")
+
+        logger.info(f"Loading OD flow data for {year} from {data_path}...")
 
         chunks = []
         for chunk in pd.read_csv(data_path, chunksize=chunksize):
@@ -351,6 +358,71 @@ class DualYearDataProcessor:
             'norm_params_2024': norm_params_2024
         }
 
+    def extract_features_for_grids(self, od_data, grid_ids):
+        """
+        Extract temporal features for specific grid IDs
+
+        Args:
+            od_data: OD flow DataFrame (already processed with temporal features)
+            grid_ids: List of grid IDs to extract features for
+
+        Returns:
+            Dictionary mapping grid_id to feature array
+        """
+        logger.info(f"Extracting features for {len(grid_ids)} grid nodes...")
+
+        features_dict = {}
+
+        # Get unique time indices from od_data
+        if 'time_idx' in od_data.columns:
+            time_indices = od_data['time_idx'].unique()
+        else:
+            # If no time_idx, assume 7 days with 24 hours each
+            time_indices = range(168)
+
+        for grid_id in grid_ids:
+            # Filter OD data for this grid as origin or destination
+            grid_od = od_data[
+                (od_data['o_grid_500'] == grid_id) |
+                (od_data['d_grid_500'] == grid_id)
+            ]
+
+            if len(grid_od) == 0:
+                # No OD data for this grid - use zero features
+                logger.warning(f"  No OD data found for grid {grid_id}, using zero features")
+                features_dict[grid_id] = np.zeros((len(time_indices), 1))
+                continue
+
+            # Aggregate by time to get total flow per timestep
+            if len(time_indices) > 0:
+                # Get inflow and outflow for each time step
+                time_series = []
+                for t in time_indices:
+                    t_data = grid_od[grid_od['time_idx'] == t] if 'time_idx' in od_data.columns else grid_od
+
+                    # Sum num_total as inflow + outflow
+                    if 'num_total' in t_data.columns:
+                        inflow = t_data[t_data['d_grid_500'] == grid_id]['num_total'].sum()
+                        outflow = t_data[t_data['o_grid_500'] == grid_id]['num_total'].sum()
+                    else:
+                        inflow = 0
+                        outflow = 0
+
+                    total = inflow + outflow
+                    time_series.append([total])
+
+                features_dict[grid_id] = np.array(time_series)
+            else:
+                # No temporal dimension, use aggregated total
+                if 'num_total' in grid_od.columns:
+                    total_flow = grid_od['num_total'].sum()
+                    features_dict[grid_id] = np.array([[total_flow]])
+                else:
+                    features_dict[grid_id] = np.zeros((1, 1))
+
+        logger.info(f"  ✓ Extracted features for {len(features_dict)} grids")
+        return features_dict
+
 
 def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_cache=True, cache_dir='data/cache'):
     """
@@ -383,8 +455,8 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
         label_content_hash = hashlib.md5(f.read()).hexdigest()[:8]
 
     # 2. OD data file modification times (large files, use mtime for efficiency)
-    data_2021_path = 'data/2021.csv'
-    data_2024_path = 'data/2024.csv'
+    data_2021_path = config.OD_2021_PATH
+    data_2024_path = config.OD_2024_PATH
 
     if os.path.exists(data_2021_path):
         data_2021_mtime = int(os.path.getmtime(data_2021_path))
@@ -513,14 +585,18 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     graph_builder = SpatialGraphBuilder(metadata_sampled, k_neighbors=8)
 
     # Build static flow-only graphs (1 aggregated graph per year)
+    # NEW: Include neighbors of labeled grids to provide spatial context for GAT
     logger.info(f"Building static flow-only graphs with threshold={config.FLOW_THRESHOLD}")
+    logger.info("INCLUDING NEIGHBOR NODES: Adding unlabeled grids connected to labeled grids")
     edge_index_2021, edge_weights_2021 = graph_builder.build_flow_graph(
         dual_year_data['od_2021'],
-        threshold=config.FLOW_THRESHOLD
+        threshold=config.FLOW_THRESHOLD,
+        include_neighbors=True  # NEW: Include neighbor nodes
     )
     edge_index_2024, edge_weights_2024 = graph_builder.build_flow_graph(
         dual_year_data['od_2024'],
-        threshold=config.FLOW_THRESHOLD
+        threshold=config.FLOW_THRESHOLD,
+        include_neighbors=True  # NEW: Include neighbor nodes
     )
 
     # Wrap in single-element lists for compatibility with existing code
@@ -533,6 +609,36 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
 
     # Create grid_id to index mapping
     grid_id_to_idx = graph_builder.grid_id_to_idx
+
+    # NEW: Extract features for newly added neighbor nodes
+    all_node_ids = set(grid_id_to_idx.keys())
+    original_labeled_ids = set(sampled_grid_ids)
+    newly_added_neighbor_ids = all_node_ids - original_labeled_ids
+
+    if len(newly_added_neighbor_ids) > 0:
+        logger.info(f"\nExtracting features for {len(newly_added_neighbor_ids)} newly added neighbor nodes...")
+
+        # Extract features for neighbor nodes
+        neighbor_features_2021 = dual_year_processor.extract_features_for_grids(
+            dual_year_data['od_2021'],
+            list(newly_added_neighbor_ids)
+        )
+        neighbor_features_2024 = dual_year_processor.extract_features_for_grids(
+            dual_year_data['od_2024'],
+            list(newly_added_neighbor_ids)
+        )
+
+        # Add neighbor features to change_features dictionary
+        for grid_id in newly_added_neighbor_ids:
+            if grid_id in neighbor_features_2021 and grid_id in neighbor_features_2024:
+                dual_year_data['change_features'][grid_id] = np.column_stack([
+                    neighbor_features_2021[grid_id],
+                    neighbor_features_2024[grid_id]
+                ])
+
+        logger.info(f"  ✓ Features extracted for {len(dual_year_data['change_features'])} total nodes")
+        logger.info(f"    - Original labeled: {len(original_labeled_ids)}")
+        logger.info(f"    - Neighbors added: {len(newly_added_neighbor_ids)}")
 
     logger.info(f"\nComplete data preparation:")
     logger.info(f"  - Total grids: {len(labels)}")
