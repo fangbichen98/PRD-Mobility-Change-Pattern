@@ -28,6 +28,67 @@ class SpatialGraphBuilder:
         self.grid_id_to_idx = {gid: idx for idx, gid in enumerate(metadata_df['grid_id'])}
         self.idx_to_grid_id = {idx: gid for gid, idx in self.grid_id_to_idx.items()}
 
+    @staticmethod
+    def add_self_loops(edge_index: np.ndarray, edge_attr: np.ndarray,
+                      num_nodes: int, weight: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Add self-loops to all nodes in the graph
+
+        This ensures that every node has at least one connection (itself),
+        which is critical for GAT to learn representations for isolated nodes.
+
+        Args:
+            edge_index: Edge indices (2, num_edges)
+            edge_attr: Edge weights (num_edges,)
+            num_nodes: Total number of nodes
+            weight: Weight for self-loops (default: 1.0)
+
+        Returns:
+            edge_index_with_loops: Edge indices with self-loops added (2, num_edges + num_nodes)
+            edge_attr_with_loops: Edge weights with self-loop weights (num_edges + num_nodes,)
+        """
+        logger.info(f"Adding self-loops to {num_nodes} nodes with weight={weight}")
+
+        # Create self-loop indices [0, 1, 2, ..., N-1] diagonal
+        node_indices = np.arange(num_nodes)
+        self_loops = np.stack([node_indices, node_indices], axis=0)
+
+        # Create self-loop weights
+        self_loop_weights = np.full(num_nodes, weight)
+
+        # Concatenate with existing edges
+        if len(edge_index) > 0 and edge_index.shape[1] > 0:
+            edge_index_with_loops = np.concatenate([edge_index, self_loops], axis=1)
+            edge_attr_with_loops = np.concatenate([edge_attr, self_loop_weights])
+        else:
+            edge_index_with_loops = self_loops
+            edge_attr_with_loops = self_loop_weights
+
+        logger.info(f"  Original edges: {edge_index.shape[1] if len(edge_index) > 0 else 0}")
+        logger.info(f"  With self-loops: {edge_index_with_loops.shape[1]}")
+
+        return edge_index_with_loops, edge_attr_with_loops
+
+    @staticmethod
+    def compute_degrees(edge_index: np.ndarray, num_nodes: int) -> np.ndarray:
+        """
+        Compute node degrees from edge_index
+
+        Args:
+            edge_index: Edge index array (2, num_edges)
+            num_nodes: Total number of nodes
+
+        Returns:
+            degrees: Array of node degrees (num_nodes,)
+        """
+        if edge_index.shape[1] == 0:
+            return np.zeros(num_nodes, dtype=int)
+
+        # Count occurrences of each node in edge_index
+        all_nodes = np.concatenate([edge_index[0], edge_index[1]])
+        degrees = np.bincount(all_nodes, minlength=num_nodes)
+        return degrees
+
     def build_knn_graph(self) -> Tuple[np.ndarray, np.ndarray]:
         """
         Build k-nearest neighbor graph based on spatial proximity
@@ -168,7 +229,115 @@ class SpatialGraphBuilder:
         logger.info(f"  - Total nodes: {len(new_grid_id_to_idx)}")
         logger.info(f"  - Total edges: {len(final_edge_list)}")
 
+        # ====================================================================
+        # GRAPH OPTIMIZATION: Apply fixes for isolated nodes
+        # ====================================================================
+        import config
+
+        num_nodes = len(new_grid_id_to_idx)
+
+        # Phase 2.1: Add self-loops
+        if config.ADD_SELF_LOOPS:
+            logger.info("Applying Phase 2.1: Adding self-loops to all nodes")
+            edge_index, edge_weights = self.add_self_loops(
+                edge_index, edge_weights, num_nodes, weight=config.SELF_LOOP_WEIGHT
+            )
+
+        # Phase 2.2: KNN fallback for isolated nodes
+        if config.USE_KNN_FALLBACK:
+            # Check for isolated nodes (after self-loop addition, if enabled)
+            degrees = self.compute_degrees(edge_index, num_nodes)
+            isolated_mask = (degrees == 0)
+            isolated_indices = np.where(isolated_mask)[0]
+
+            if len(isolated_indices) > 0:
+                logger.info(f"Applying Phase 2.2: Found {len(isolated_indices)} isolated nodes, adding KNN fallback")
+
+                # Get isolated grid IDs
+                isolated_grid_ids = [new_idx_to_grid_id[idx] for idx in isolated_indices]
+
+                # Build KNN edges for isolated nodes
+                knn_edges = self._build_knn_for_isolated_nodes(
+                    isolated_grid_ids, isolated_indices, new_grid_id_to_idx, config.KNN_FALLBACK_K
+                )
+
+                # Merge KNN edges
+                for o_idx, d_idx, weight in knn_edges:
+                    final_edge_list.append([o_idx, d_idx])
+                    final_edge_weights.append(weight)
+
+                # Rebuild edge_index and edge_weights with new edges
+                if final_edge_list:
+                    edge_index = np.array(final_edge_list).T
+                    edge_weights = np.array(final_edge_weights)
+
+                    logger.info(f"  Added {len(knn_edges)} KNN fallback edges")
+                else:
+                    logger.warning("  No KNN edges were added despite isolated nodes")
+            else:
+                logger.info("Phase 2.2: No isolated nodes found (KNN fallback not needed)")
+
         return edge_index, edge_weights
+
+    def _build_knn_for_isolated_nodes(
+        self,
+        isolated_grid_ids: List[int],
+        isolated_indices: np.ndarray,
+        grid_id_to_idx: Dict[int, int],
+        k: int = 8
+    ) -> List[Tuple[int, int, float]]:
+        """
+        Build KNN edges for isolated nodes using spatial proximity
+
+        Args:
+            isolated_grid_ids: List of grid IDs that are isolated
+            isolated_indices: List of node indices that are isolated
+            grid_id_to_idx: Mapping from grid_id to node index
+            k: Number of nearest neighbors to find
+
+        Returns:
+            knn_edges: List of (source_idx, target_idx, weight) tuples
+        """
+        logger.info(f"  Building KNN edges for {len(isolated_grid_ids)} isolated nodes (k={k})")
+
+        # Extract coordinates for all grids
+        all_coords = self.metadata_df[['lon', 'lat']].values
+        all_grid_ids = self.metadata_df['grid_id'].values
+
+        # Build KD-tree for efficient nearest neighbor search
+        tree = cKDTree(all_coords)
+
+        knn_edges = []
+
+        for grid_id, idx in zip(isolated_grid_ids, isolated_indices):
+            # Get grid coordinates
+            grid_row = self.metadata_df[self.metadata_df['grid_id'] == grid_id]
+            if len(grid_row) == 0:
+                continue
+
+            coord = grid_row[['lon', 'lat']].values[0]
+
+            # Find k+1 nearest neighbors (includes self)
+            distances, indices = tree.query(coord, k=k+1)
+
+            # Skip first result (self) and create edges
+            for neighbor_idx, dist in zip(indices[1:], distances[1:]):
+                neighbor_grid_id = all_grid_ids[neighbor_idx]
+
+                # Only add edge if neighbor is in our graph
+                if neighbor_grid_id in grid_id_to_idx:
+                    neighbor_node_idx = grid_id_to_idx[neighbor_grid_id]
+
+                    # Weight: inverse distance (closer = stronger)
+                    # Apply KNN_FALLBACK_WEIGHT multiplier
+                    import config
+                    weight = (1.0 / (dist + 1e-6)) * config.KNN_FALLBACK_WEIGHT
+
+                    knn_edges.append((idx, neighbor_node_idx, weight))
+
+        logger.info(f"  Created {len(knn_edges)} KNN edges for isolated nodes")
+
+        return knn_edges
 
     def build_hybrid_graph(self, od_df: pd.DataFrame,
                           spatial_weight: float = 0.5,
