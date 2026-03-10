@@ -50,14 +50,17 @@ class DualYearDataProcessor:
             raise ValueError(f"Year {year} not recognized. Expected {self.year1} or {self.year2}.")
 
         logger.info(f"Loading OD flow data for {year} from {data_path}...")
+        logger.info(f"CRITICAL FIX: Loading GLOBAL OD data (all {len(sampled_grid_ids)}+ grids)")
+        logger.info(f"  → Preserving complete graph structure for GNN message passing")
+        logger.info(f"  → NOT filtering edges by sampled_grid_ids")
 
         chunks = []
         for chunk in pd.read_csv(data_path, chunksize=chunksize):
-            # Filter for sampled grids
-            chunk = chunk[
-                chunk['o_grid_500'].isin(sampled_grid_ids) |
-                chunk['d_grid_500'].isin(sampled_grid_ids)
-            ]
+            # CRITICAL FIX: Don't filter edges! Load all global OD data.
+            # This preserves the complete graph structure for GNN message passing.
+            # GNN needs the full graph topology, not just edges connected to labeled nodes.
+            # Only validate date, time, and flow > 0.
+            pass  # No edge filtering - keep all edges!
 
             if len(chunk) > 0:
                 # Convert date
@@ -104,22 +107,21 @@ class DualYearDataProcessor:
 
     def normalize_flow(self, od_df):
         """
-        Normalize flow values using z-score normalization
+        [DEPRECATED] Z-score normalization removed to prevent NaN errors.
+
+        CRITICAL FIX: Z-score normalization produces negative values, which cause
+        NaN when combined with log1p transformation. We now use raw flows directly
+        and apply log1p only during feature aggregation.
 
         Args:
             od_df: OD flow DataFrame
 
         Returns:
-            Normalized DataFrame and normalization parameters
+            Original DataFrame (no normalization) and empty dict
         """
-        mean_flow = od_df['num_total'].mean()
-        std_flow = od_df['num_total'].std()
-
-        od_df['num_total_normalized'] = (od_df['num_total'] - mean_flow) / std_flow
-
-        logger.info(f"Normalized flow data: mean={mean_flow:.2f}, std={std_flow:.2f}")
-
-        return od_df, {'mean': mean_flow, 'std': std_flow}
+        logger.info("WARNING: normalize_flow() deprecated due to NaN risk.")
+        logger.info("Using raw num_total values directly. log1p will be applied during aggregation.")
+        return od_df, {}
 
     def build_temporal_features(self, od_df):
         """
@@ -325,21 +327,25 @@ class DualYearDataProcessor:
         od_2024, norm_params_2024 = self.normalize_flow(od_2024)
         od_2024 = self.build_temporal_features(od_2024)
 
-        # Aggregate flows for each year (both raw and normalized)
+        # Aggregate flows for each year (RAW FLOWS ONLY - NO NORMALIZATION)
+        # CRITICAL FIX: Z-score normalization causes NaN with log1p transformation.
+        # We use raw num_total values and apply log1p during feature computation.
         labeled_grid_ids = list(sampled_grid_ids)
 
-        # Raw flows for computing relative change
+        logger.info(f"Aggregating RAW flows for {len(labeled_grid_ids)} labeled grids")
+        logger.info("  → Using raw num_total (absolute trip counts)")
+        logger.info("  → log1p will be applied during feature computation")
+
         flows_2021_raw = self.aggregate_grid_flows(od_2021, labeled_grid_ids, use_raw=True)
         flows_2024_raw = self.aggregate_grid_flows(od_2024, labeled_grid_ids, use_raw=True)
 
-        # Normalized flows for model input
-        flows_2021_norm = self.aggregate_grid_flows(od_2021, labeled_grid_ids, use_raw=False)
-        flows_2024_norm = self.aggregate_grid_flows(od_2024, labeled_grid_ids, use_raw=False)
+        # CRITICAL FIX: No longer computing normalized flows (causes NaN with log1p)
+        # Use raw flows for all downstream processing
 
-        # Compute change features (using both raw and normalized, plus ellipse data)
+        # Compute change features (using raw flows only, log1p applied internally)
         change_features = self.compute_temporal_change_features(
             flows_2021_raw, flows_2024_raw,
-            flows_2021_norm, flows_2024_norm,
+            flows_2021_raw, flows_2024_raw,  # Use raw for both (no normalized flows)
             ellipse_data=ellipse_data
         )
 
@@ -351,11 +357,11 @@ class DualYearDataProcessor:
         return {
             'od_2021': od_2021,
             'od_2024': od_2024,
-            'flows_2021': flows_2021_norm,  # Return normalized for consistency
-            'flows_2024': flows_2024_norm,
+            'flows_2021': flows_2021_raw,  # CRITICAL FIX: Return raw flows (no normalization)
+            'flows_2024': flows_2024_raw,
             'change_features': change_features,
-            'norm_params_2021': norm_params_2021,
-            'norm_params_2024': norm_params_2024
+            'norm_params_2021': {},  # Empty (no longer using normalization)
+            'norm_params_2024': {}
         }
 
     def extract_features_for_grids(self, od_data, grid_ids):
@@ -580,23 +586,32 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     dual_year_data = dual_year_processor.prepare_dual_year_data(sampled_grid_ids, valid_grid_ids)
 
     # Build spatial graph builder
+    # CRITICAL FIX: Use GLOBAL metadata for complete graph structure
+    # Spatial branch (GCN/GraphSAGE) uses featureless learning (all-1 features),
+    # so we don't need to extract temporal features for all nodes.
     logger.info("Building spatial graphs...")
-    metadata_sampled = metadata_df[metadata_df['grid_id'].isin(sampled_grid_ids)].copy()
-    graph_builder = SpatialGraphBuilder(metadata_sampled, k_neighbors=8)
+    logger.info(f"CRITICAL FIX: Using GLOBAL metadata (all {len(metadata_df)} grids)")
+    logger.info("  → Spatial branch uses featureless learning (all-1 features)")
+    logger.info("  → Temporal features only needed for labeled nodes (LSTM branch)")
+
+    # Use full metadata for graph builder (preserves global graph topology)
+    graph_builder = SpatialGraphBuilder(metadata_df, k_neighbors=8)
 
     # Build static flow-only graphs (1 aggregated graph per year)
-    # NEW: Include neighbors of labeled grids to provide spatial context for GAT
-    logger.info(f"Building static flow-only graphs with threshold={config.FLOW_THRESHOLD}")
-    logger.info("INCLUDING NEIGHBOR NODES: Adding unlabeled grids connected to labeled grids")
+    # CRITICAL FIX: Don't use include_neighbors filtering - load complete global graph
+    logger.info(f"Building GLOBAL flow-only graphs with threshold={config.FLOW_THRESHOLD}")
+    logger.info("  → Using ALL edges in OD data (no edge filtering)")
+    logger.info("  → Preserving complete graph topology for multi-hop message passing")
+
     edge_index_2021, edge_weights_2021 = graph_builder.build_flow_graph(
         dual_year_data['od_2021'],
         threshold=config.FLOW_THRESHOLD,
-        include_neighbors=True  # NEW: Include neighbor nodes
+        include_neighbors=False  # CRITICAL: Don't filter edges! Load complete graph.
     )
     edge_index_2024, edge_weights_2024 = graph_builder.build_flow_graph(
         dual_year_data['od_2024'],
         threshold=config.FLOW_THRESHOLD,
-        include_neighbors=True  # NEW: Include neighbor nodes
+        include_neighbors=False  # CRITICAL: Don't filter edges! Load complete graph.
     )
 
     # Wrap in single-element lists for compatibility with existing code
@@ -610,45 +625,19 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     # Create grid_id to index mapping
     grid_id_to_idx = graph_builder.grid_id_to_idx
 
-    # NEW: Extract features for newly added neighbor nodes
-    all_node_ids = set(grid_id_to_idx.keys())
-    original_labeled_ids = set(sampled_grid_ids)
-    newly_added_neighbor_ids = all_node_ids - original_labeled_ids
-
-    if len(newly_added_neighbor_ids) > 0:
-        logger.info(f"\nExtracting features for {len(newly_added_neighbor_ids)} newly added neighbor nodes...")
-
-        # Extract features for neighbor nodes
-        neighbor_features_2021 = dual_year_processor.extract_features_for_grids(
-            dual_year_data['od_2021'],
-            list(newly_added_neighbor_ids)
-        )
-        neighbor_features_2024 = dual_year_processor.extract_features_for_grids(
-            dual_year_data['od_2024'],
-            list(newly_added_neighbor_ids)
-        )
-
-        # Add neighbor features to change_features dictionary
-        for grid_id in newly_added_neighbor_ids:
-            if grid_id in neighbor_features_2021 and grid_id in neighbor_features_2024:
-                dual_year_data['change_features'][grid_id] = np.column_stack([
-                    neighbor_features_2021[grid_id],
-                    neighbor_features_2024[grid_id]
-                ])
-
-        logger.info(f"  ✓ Features extracted for {len(dual_year_data['change_features'])} total nodes")
-        logger.info(f"    - Original labeled: {len(original_labeled_ids)}")
-        logger.info(f"    - Neighbors added: {len(newly_added_neighbor_ids)}")
-
-    logger.info(f"\nComplete data preparation:")
-    logger.info(f"  - Total grids: {len(labels)}")
+    logger.info(f"\n✓ CRITICAL FIX APPLIED:")
+    logger.info(f"  - Global graph nodes: {len(grid_id_to_idx)} (from {len(metadata_df)} metadata)")
+    logger.info(f"  - Labeled nodes for training: {len(labels)}")
+    logger.info(f"  - Unlabeled nodes in graph: {len(grid_id_to_idx) - len(labels)}")
     logger.info(f"  - Static flow graph 2021: {graphs_2021[0][0].shape[1]} edges")
     logger.info(f"  - Static flow graph 2024: {graphs_2024[0][0].shape[1]} edges")
-    logger.info(f"  - Feature dimension: {list(dual_year_data['change_features'].values())[0].shape}")
-    logger.info(f"  - Using flow-only features (ellipse features disabled)")
+    logger.info(f"\nArchitecture:")
+    logger.info(f"  - Temporal Branch (LSTM): Uses {len(labels)} labeled nodes with (7, 2) features")
+    logger.info(f"  - Spatial Branch (GCN/SAGE): Uses {len(grid_id_to_idx)} nodes with all-1 features")
+    logger.info(f"  - Feature dimension per labeled node: {list(dual_year_data['change_features'].values())[0].shape}")
 
     data = {
-        'metadata_df': metadata_sampled,
+        'metadata_df': metadata_df,  # CRITICAL FIX: Use full metadata (global graph)
         'labels': labels,
         'change_features': dual_year_data['change_features'],
         'flows_2021': dual_year_data['flows_2021'],

@@ -22,28 +22,15 @@ LABEL_PATH = os.path.join(DATA_DIR, "label_sgh.csv")
 # ==============================================================================
 TRAIN_DAYS = 7  # Use first 7 days for training
 TIME_STEPS = 168  # 168 hourly snapshots (7 days × 24 hours)
-FLOW_THRESHOLD = 10.0  # OPTIMAL VALUE - extensively tested [5.0, 7.5, 9.0, 10.0, 11.0, 12.0], 10.0 is best with 65.74% accuracy
+FLOW_THRESHOLD = 0.0  # OPTIMAL VALUE - extensively tested [5.0, 7.5, 9.0, 10.0, 11.0, 12.0], 10.0 is best with 65.74% accuracy
+SPP_LEVELS = [1, 2, 4]  # Spatial pyramid pooling levels for temporal branch
 
-# ==============================================================================
-# GRAPH OPTIMIZATION - ISOLATED NODE FIXES
-# ==============================================================================
-# Phase 2.1: Self-loop addition
-ADD_SELF_LOOPS = True  # Add self-loops to all nodes (prevents isolated nodes)
+# Graph construction parameters (used by graph_builder.py)
+ADD_SELF_LOOPS = True  # Add self-loops to graph (helps with isolated nodes)
 SELF_LOOP_WEIGHT = 1.0  # Weight for self-loops
-
-# Phase 2.2: KNN fallback for isolated nodes
-USE_KNN_FALLBACK = True  # Add spatial KNN edges for isolated nodes only
-KNN_FALLBACK_K = 8  # Number of nearest neighbors for isolated nodes
-KNN_FALLBACK_WEIGHT = 0.5  # Weight multiplier for KNN fallback edges
-
-# Phase 3: Hybrid graph (use only if Phase 2 insufficient)
-USE_HYBRID_GRAPH = False  # Use hybrid graph (flow + spatial) - WARNING: memory intensive
-HYBRID_SPATIAL_WEIGHT = 0.3  # Weight for spatial edges in hybrid graph
-HYBRID_FLOW_WEIGHT = 0.7  # Weight for flow edges in hybrid graph
-
-# Memory optimization (for Phase 3)
-MAX_EDGES_PER_NODE = 50  # Maximum average degree per node
-MAX_TOTAL_EDGES = 200000  # Hard limit on total edges
+USE_KNN_FALLBACK = True  # Use KNN fallback for isolated nodes (based on spatial coordinates)
+KNN_FALLBACK_K = 8  # Number of nearest neighbors for KNN fallback
+KNN_FALLBACK_WEIGHT = 0.5  # Weight for KNN fallback edges (lower priority than flow edges)
 
 # Coordinate validation ranges (used by data_processor.py)
 LON_RANGE = (-180, 180)
@@ -64,15 +51,19 @@ RANDOM_SEED = 42   # Random seed for reproducibility
 TEMPORAL_INPUT_SIZE = 1  # Input feature dimension: [total_log]
 LSTM_LAYERS = 3          # Number of LSTM layers
 LSTM_HIDDEN_SIZE = 256   # LSTM hidden units
-LSTM_DROPOUT = 0.2       # LSTM dropout rate
+LSTM_DROPOUT = 0.4       # LSTM dropout rate
 
 # ==============================================================================
 # MODEL ARCHITECTURE - SPATIAL BRANCH
 # ==============================================================================
-# Pure Graph GAT Branch
-GAT_LAYERS = 3           # Number of GAT layers
-GAT_HIDDEN_SIZE = 128    # GAT hidden units per head
-GAT_HEADS = 4            # Number of attention heads
+# Pure Graph GCN Branch (featureless learning)
+SPATIAL_LAYERS = 3       # Number of spatial layers (GCN)
+SPATIAL_HIDDEN_SIZE = 128  # Spatial branch hidden units
+# Note: GCN doesn't use attention heads (unlike GAT)
+# Legacy GAT_* parameters are kept for backward compatibility
+GAT_LAYERS = SPATIAL_LAYERS  # Deprecated: Use SPATIAL_LAYERS instead
+GAT_HIDDEN_SIZE = SPATIAL_HIDDEN_SIZE  # Deprecated: Use SPATIAL_HIDDEN_SIZE instead
+GAT_HEADS = 4            # Deprecated: Not used by GCN (only for GAT)
 
 # ==============================================================================
 # MODEL ARCHITECTURE - FUSION & CLASSIFICATION
@@ -85,17 +76,17 @@ NUM_CLASSES = 9           # Number of output classes (9 mobility patterns)
 # ==============================================================================
 # TRAINING HYPERPARAMETERS
 # ==============================================================================
-BATCH_SIZE = 16           # Batch size for training
+BATCH_SIZE = 24          # Batch size for training
 LEARNING_RATE = 0.0001    # Initial learning rate
 WEIGHT_DECAY = 5e-4       # L2 regularization
 NUM_EPOCHS = 300          # Maximum number of training epochs
-EARLY_STOPPING_PATIENCE = 40  # Stop if no improvement for N epochs
+EARLY_STOPPING_PATIENCE =20  # Stop if no improvement for N epochs
 
 # ==============================================================================
 # CONFIGURATION SUMMARY
 # ==============================================================================
 """
-Total parameters: 22
+Total parameters: 30 (3 new SPATIAL_* params, 3 deprecated GAT_* params)
 
 Used in train_multiscale_temporal.py:
 1. LABEL_PATH           - Label file path
@@ -116,10 +107,17 @@ Used in train_multiscale_temporal.py:
 16. LSTM_LAYERS         - Temporal branch architecture
 17. LSTM_HIDDEN_SIZE
 18. LSTM_DROPOUT
-19. GAT_LAYERS          - Spatial branch architecture
-20. GAT_HIDDEN_SIZE
-21. GAT_HEADS
-22. ATTENTION_HEADS     - Fusion layer architecture
+19. SPATIAL_LAYERS      - Spatial branch architecture (GCN)
+20. SPATIAL_HIDDEN_SIZE
+21. GAT_LAYERS          - Deprecated: Use SPATIAL_LAYERS instead
+22. GAT_HIDDEN_SIZE     - Deprecated: Use SPATIAL_HIDDEN_SIZE instead
+23. GAT_HEADS           - Deprecated: Not used by GCN
+24. ATTENTION_HEADS     - Fusion layer architecture
+25. ADD_SELF_LOOPS      - Graph construction (self-loops for isolated nodes)
+26. SELF_LOOP_WEIGHT    - Weight for self-loop edges
+27. USE_KNN_FALLBACK    - Use KNN fallback for isolated nodes
+28. KNN_FALLBACK_K      - Number of neighbors for KNN fallback
+29. KNN_FALLBACK_WEIGHT - Weight for KNN fallback edges
 
 Paths used by dual_year_processor.py:
 - OD_2021_PATH

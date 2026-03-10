@@ -1,11 +1,13 @@
 """
 Simplified dual-branch model using pure graph structure
+
+REFACTORING: Now supports GCN (main model) and GraphSAGE (baseline)
 """
 import torch
 import torch.nn as nn
 import config
 from src.models.temporal_branch import ParallelTemporalBranch
-from src.models.spatial_branch_pure_graph import PureGraphDualYearGAT
+from src.models.spatial_branch_pure_graph import PureGraphDualYearGCN, PureGraphDualYearSAGE
 
 
 class MultiFeatureAttentionFusion(nn.Module):
@@ -48,6 +50,8 @@ class PureGraphDualBranchModel(nn.Module):
     """
     Pure Graph Dual-Branch Model for 9-Class Mobility Pattern Classification
 
+    REFACTORING: Now supports GCN (main) and GraphSAGE (baseline) spatial branches
+
     Key changes from original:
     1. Spatial branch uses only graph structure (no external node features)
     2. Temporal branch still uses time series features (kept for temporal patterns)
@@ -56,7 +60,7 @@ class PureGraphDualBranchModel(nn.Module):
 
     Architecture:
         Temporal Branch: LSTM + SPP → 6 features (2021, 2024, diff) × 2
-        Spatial Branch: Pure Graph GAT → 3 features (2021, 2024, diff)
+        Spatial Branch: GCN or GraphSAGE → 3 features (2021, 2024, diff)
         Fusion: Multi-head attention → 256-dim
         Classifier: Single 9-class classification head
     """
@@ -66,7 +70,8 @@ class PureGraphDualBranchModel(nn.Module):
                  hidden_size: int = 256,
                  num_classes: int = config.NUM_CLASSES,
                  num_time_steps: int = 7,
-                 dropout: float = 0.2):
+                 dropout: float = 0.2,
+                 spatial_model_type: str = 'gcn'):
         """
         Initialize pure graph dual-branch model
 
@@ -76,8 +81,12 @@ class PureGraphDualBranchModel(nn.Module):
             num_classes: Number of output classes (9)
             num_time_steps: Number of time steps (7 days)
             dropout: Dropout rate
+            spatial_model_type: Type of spatial model ('gcn' or 'sage')
         """
         super(PureGraphDualBranchModel, self).__init__()
+
+        # Store model type for reference
+        self.spatial_model_type = spatial_model_type
 
         # Temporal branch (unchanged - still uses time series features)
         self.temporal_branch = ParallelTemporalBranch(
@@ -85,13 +94,23 @@ class PureGraphDualBranchModel(nn.Module):
             output_size=hidden_size
         )
 
-        # Spatial branch (NEW - pure graph structure)
-        self.spatial_branch = PureGraphDualYearGAT(
-            hidden_size=config.GAT_HIDDEN_SIZE,
-            num_layers=config.GAT_LAYERS,
-            heads=config.GAT_HEADS,
-            output_size=hidden_size
-        )
+        # Spatial branch (NEW - pure graph structure with GCN or GraphSAGE)
+        if spatial_model_type == 'gcn':
+            self.spatial_branch = PureGraphDualYearGCN(
+                hidden_size=config.GAT_HIDDEN_SIZE,  # Reuse GAT_HIDDEN_SIZE config
+                num_layers=config.GAT_LAYERS,        # Reuse GAT_LAYERS config
+                dropout=dropout,
+                output_size=hidden_size
+            )
+        elif spatial_model_type == 'sage':
+            self.spatial_branch = PureGraphDualYearSAGE(
+                hidden_size=config.GAT_HIDDEN_SIZE,  # Reuse GAT_HIDDEN_SIZE config
+                num_layers=config.GAT_LAYERS,        # Reuse GAT_LAYERS config
+                dropout=dropout,
+                output_size=hidden_size
+            )
+        else:
+            raise ValueError(f"Unsupported spatial_model_type: {spatial_model_type}. Use 'gcn' or 'sage'.")
 
         # Multi-feature attention fusion (9 features: 6 temporal + 3 spatial)
         self.fusion = MultiFeatureAttentionFusion(
@@ -195,8 +214,8 @@ class PureGraphDualBranchModel(nn.Module):
 
 
 if __name__ == "__main__":
-    # Test complete model
-    print("Testing PureGraphDualBranchModel")
+    # Test complete model with both GCN and GraphSAGE
+    print("Testing PureGraphDualBranchModel (GCN and GraphSAGE)")
     print("=" * 80)
 
     batch_size = 8
@@ -210,11 +229,12 @@ if __name__ == "__main__":
     x_2024 = torch.randn(num_nodes, num_time_steps, 2)
 
     # Graph structure (no node features needed!)
+    # Simulate extreme flow values (max 12101)
     edge_index_2021 = torch.randint(0, num_nodes, (2, num_edges))
-    edge_attr_2021 = torch.rand(num_edges) * 100
+    edge_attr_2021 = torch.rand(num_edges) * 12101
 
     edge_index_2024 = torch.randint(0, num_nodes, (2, num_edges))
-    edge_attr_2024 = torch.rand(num_edges) * 100
+    edge_attr_2024 = torch.rand(num_edges) * 12101
 
     graphs_2021 = [(edge_index_2021, edge_attr_2021)]
     graphs_2024 = [(edge_index_2024, edge_attr_2024)]
@@ -222,32 +242,31 @@ if __name__ == "__main__":
     # Batch indices
     node_indices = torch.randint(0, num_nodes, (batch_size,))
 
-    # Create model
-    model = PureGraphDualBranchModel(
+    # ==============================================================================
+    # Test GCN Model
+    # ==============================================================================
+    print("\n1. Testing with GCN Spatial Branch")
+    print("-" * 80)
+
+    model_gcn = PureGraphDualBranchModel(
         temporal_input_size=2,
         hidden_size=256,
         num_classes=9,
         num_time_steps=7,
-        dropout=0.2
+        dropout=0.2,
+        spatial_model_type='gcn'
     )
 
-    print(f"\nModel Architecture:")
+    print(f"Model Architecture:")
     print(f"  - Temporal Branch: LSTM + SPP → 6 features")
-    print(f"  - Spatial Branch: Pure Graph GAT → 3 features")
+    print(f"  - Spatial Branch: GCN (normalize=True, add_self_loops=True) → 3 features")
     print(f"  - Fusion: Multi-head Attention → 256-dim")
     print(f"  - Classification: Single 9-class head")
-    print(f"  - Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"  - Total parameters: {sum(p.numel() for p in model_gcn.parameters()):,}")
 
-    # Test forward pass
-    print(f"\nTesting forward pass:")
-    print(f"  - Batch size: {batch_size}")
-    print(f"  - Num nodes: {num_nodes}")
-    print(f"  - Temporal input: ({num_nodes}, {num_time_steps}, 2)")
-    print(f"  - Graph input: edge_index + edge_attr (no node features!)")
-
-    model.eval()
+    model_gcn.eval()
     with torch.no_grad():
-        logits = model(
+        logits_gcn = model_gcn(
             x_2021=x_2021,
             x_2024=x_2024,
             graphs_2021=graphs_2021,
@@ -257,13 +276,72 @@ if __name__ == "__main__":
         )
 
     print(f"\nOutput shapes:")
-    print(f"  - Logits: {logits.shape} (expected: {batch_size}, 9)")
+    print(f"  - Logits: {logits_gcn.shape} (expected: {batch_size}, 9)")
+
+    # Check for NaN/Inf
+    has_nan = torch.isnan(logits_gcn).any()
+    has_inf = torch.isinf(logits_gcn).any()
+    print(f"\nNumerical stability check:")
+    print(f"  - Has NaN: {has_nan}")
+    print(f"  - Has Inf: {has_inf}")
+    if not (has_nan or has_inf):
+        print(f"  ✓ GCN model handles extreme flow values well!")
+
+    # ==============================================================================
+    # Test GraphSAGE Model
+    # ==============================================================================
+    print("\n\n2. Testing with GraphSAGE Spatial Branch")
+    print("-" * 80)
+
+    model_sage = PureGraphDualBranchModel(
+        temporal_input_size=2,
+        hidden_size=256,
+        num_classes=9,
+        num_time_steps=7,
+        dropout=0.2,
+        spatial_model_type='sage'
+    )
+
+    print(f"Model Architecture:")
+    print(f"  - Temporal Branch: LSTM + SPP → 6 features")
+    print(f"  - Spatial Branch: GraphSAGE (aggr='mean', log1p weights) → 3 features")
+    print(f"  - Fusion: Multi-head Attention → 256-dim")
+    print(f"  - Classification: Single 9-class head")
+    print(f"  - Total parameters: {sum(p.numel() for p in model_sage.parameters()):,}")
+
+    model_sage.eval()
+    with torch.no_grad():
+        logits_sage = model_sage(
+            x_2021=x_2021,
+            x_2024=x_2024,
+            graphs_2021=graphs_2021,
+            graphs_2024=graphs_2024,
+            num_nodes=num_nodes,
+            node_indices=node_indices
+        )
+
+    print(f"\nOutput shapes:")
+    print(f"  - Logits: {logits_sage.shape} (expected: {batch_size}, 9)")
+
+    # Check for NaN/Inf
+    has_nan = torch.isnan(logits_sage).any()
+    has_inf = torch.isinf(logits_sage).any()
+    print(f"\nNumerical stability check:")
+    print(f"  - Has NaN: {has_nan}")
+    print(f"  - Has Inf: {has_inf}")
+    if not (has_nan or has_inf):
+        print(f"  ✓ GraphSAGE model handles extreme flow values well!")
 
     print("\n" + "=" * 80)
     print("✓ All tests passed!")
     print("\nKey features:")
     print("  1. Spatial branch uses only graph structure (no redundant node features)")
-    print("  2. Single GAT pass per year (not 7 daily passes)")
-    print("  3. ~7x faster spatial processing")
-    print("  4. Simpler data preprocessing")
-    print("  5. Single 9-class classification (simplified from hierarchical)")
+    print("  2. Supports GCN (main) and GraphSAGE (baseline)")
+    print("  3. GCN: Laplacian normalization for extreme flows (max 12101)")
+    print("  4. GraphSAGE: Log1p transformation for numerical stability")
+    print("  5. Single pass per year (not 7 daily passes)")
+    print("  6. ~7x faster spatial processing")
+    print("  7. Simpler data preprocessing")
+    print("  8. Single 9-class classification (simplified from hierarchical)")
+    print("  9. Featureless learning (all-1 node features)")
+

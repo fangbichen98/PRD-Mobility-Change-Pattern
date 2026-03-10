@@ -8,7 +8,7 @@ This model integrates the improvements from Phase 2 of the optimization plan.
 import torch
 import torch.nn as nn
 import config
-from src.models.spatial_branch_pure_graph import PureGraphDualYearGAT
+from src.models.spatial_branch_pure_graph import PureGraphDualYearGCN
 from src.models.multi_scale_temporal import SimplifiedMultiScaleTemporal
 from src.models.gated_fusion import GatedFeatureFusion
 
@@ -24,7 +24,7 @@ class EnhancedDualBranchModel(nn.Module):
 
     Architecture:
         Temporal Branch: Multi-scale (hourly/daily/weekly) → 3 features per year
-        Spatial Branch: Pure Graph GAT → 3 features (2021, 2024, diff)
+        Spatial Branch: Pure Graph GCN (featureless learning) → 3 features (2021, 2024, diff)
         Fusion: Gated mechanism → 256-dim
         Classifier: Single 9-class classification head
     """
@@ -60,11 +60,11 @@ class EnhancedDualBranchModel(nn.Module):
             dropout=dropout
         )
 
-        # Spatial branch: Pure graph GAT (unchanged)
-        self.spatial_branch = PureGraphDualYearGAT(
-            hidden_size=config.GAT_HIDDEN_SIZE,
-            num_layers=config.GAT_LAYERS,
-            heads=config.GAT_HEADS,
+        # Spatial branch: Pure graph GCN (featureless learning)
+        self.spatial_branch = PureGraphDualYearGCN(
+            hidden_size=config.SPATIAL_HIDDEN_SIZE,
+            num_layers=config.SPATIAL_LAYERS,
+            dropout=dropout,
             output_size=hidden_size
         )
 
@@ -167,11 +167,11 @@ class AlternativeEnhancedModel(nn.Module):
             dropout=dropout
         )
 
-        # Spatial branch
-        self.spatial_branch = PureGraphDualYearGAT(
-            hidden_size=config.GAT_HIDDEN_SIZE,
-            num_layers=config.GAT_LAYERS,
-            heads=config.GAT_HEADS,
+        # Spatial branch: Pure graph GCN (featureless learning)
+        self.spatial_branch = PureGraphDualYearGCN(
+            hidden_size=config.SPATIAL_HIDDEN_SIZE,
+            num_layers=config.SPATIAL_LAYERS,
+            dropout=dropout,
             output_size=hidden_size
         )
 
