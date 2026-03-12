@@ -2,13 +2,15 @@
 Enhanced dual-branch model with Phase 2 improvements:
 1. Multi-scale temporal branch
 2. Gated feature fusion
+3. GINE spatial branch with Laplacian PE (optional)
 
 This model integrates the improvements from Phase 2 of the optimization plan.
 """
 import torch
 import torch.nn as nn
 import config
-from src.models.spatial_branch_pure_graph import PureGraphDualYearGCN
+from src.models.spatial_branch_pure_graph import PureGraphDualYearGCN, PureGraphDualYearSAGE
+from src.models.spatial_branch_gine import PureGraphDualYearGINE, compute_laplacian_pe
 from src.models.multi_scale_temporal import SimplifiedMultiScaleTemporal
 from src.models.gated_fusion import GatedFeatureFusion
 
@@ -21,29 +23,32 @@ class EnhancedDualBranchModel(nn.Module):
     1. Multi-scale temporal branch (hourly + daily + weekly patterns)
     2. Gated fusion for dynamic feature selection
     3. Enhanced regularization
+    4. Optional GINE spatial branch with Laplacian PE
 
     Architecture:
         Temporal Branch: Multi-scale (hourly/daily/weekly) → 3 features per year
-        Spatial Branch: Pure Graph GCN (featureless learning) → 3 features (2021, 2024, diff)
+        Spatial Branch: GCN/SAGE/GINE (featureless or with Laplacian PE) → 3 features (2021, 2024, diff)
         Fusion: Gated mechanism → 256-dim
         Classifier: Single 9-class classification head
     """
 
     def __init__(self,
-                 temporal_input_size: int = 1,
+                 temporal_input_size: int = 2,
                  hidden_size: int = 256,
                  num_classes: int = config.NUM_CLASSES,
                  num_time_steps: int = 168,
-                 dropout: float = 0.4):
+                 dropout: float = 0.4,
+                 spatial_model: str = "GCN"):
         """
         Initialize enhanced dual-branch model
 
         Args:
-            temporal_input_size: Input size per timestep (default: 1 for total flow)
+            temporal_input_size: Input size per timestep (default: 2 for [inflow, outflow])
             hidden_size: Hidden feature size (default: 256)
             num_classes: Number of output classes (9)
             num_time_steps: Number of time steps (168 hours)
             dropout: Dropout rate (default: 0.4, increased from 0.2)
+            spatial_model: Spatial branch model type ("GCN", "SAGE", or "GINE")
         """
         super(EnhancedDualBranchModel, self).__init__()
 
@@ -51,6 +56,7 @@ class EnhancedDualBranchModel(nn.Module):
         self.hidden_size = hidden_size
         self.num_classes = num_classes
         self.num_time_steps = num_time_steps
+        self.spatial_model = spatial_model
 
         # Temporal branch: Multi-scale processing
         self.temporal_branch = SimplifiedMultiScaleTemporal(
@@ -60,18 +66,39 @@ class EnhancedDualBranchModel(nn.Module):
             dropout=dropout
         )
 
-        # Spatial branch: Pure graph GCN (featureless learning)
-        self.spatial_branch = PureGraphDualYearGCN(
-            hidden_size=config.SPATIAL_HIDDEN_SIZE,
-            num_layers=config.SPATIAL_LAYERS,
-            dropout=dropout,
-            output_size=hidden_size
-        )
+        # Spatial branch: Choose model type
+        if spatial_model == "GINE":
+            self.spatial_branch = PureGraphDualYearGINE(
+                input_size=config.LAPLACIAN_PE_DIM,
+                hidden_size=config.SPATIAL_HIDDEN_SIZE,
+                num_layers=config.SPATIAL_LAYERS,
+                dropout=dropout,
+                output_size=hidden_size
+            )
+            self.use_laplacian_pe = True
+            self.laplacian_pe_2021 = None
+            self.laplacian_pe_2024 = None
+        elif spatial_model == "SAGE":
+            self.spatial_branch = PureGraphDualYearSAGE(
+                hidden_size=config.SPATIAL_HIDDEN_SIZE,
+                num_layers=config.SPATIAL_LAYERS,
+                dropout=dropout,
+                output_size=hidden_size
+            )
+            self.use_laplacian_pe = False
+        else:  # Default to GCN
+            self.spatial_branch = PureGraphDualYearGCN(
+                hidden_size=config.SPATIAL_HIDDEN_SIZE,
+                num_layers=config.SPATIAL_LAYERS,
+                dropout=dropout,
+                output_size=hidden_size
+            )
+            self.use_laplacian_pe = False
 
         # Gated fusion layer (replaces attention fusion)
         self.fusion = GatedFeatureFusion(
             feature_size=hidden_size,
-            num_features=6,  # 2 temporal + 3 spatial + 1 diff = 6
+            num_features=6,  # 3 temporal + 3 spatial
             dropout=dropout
         )
 
@@ -83,13 +110,34 @@ class EnhancedDualBranchModel(nn.Module):
             nn.Linear(hidden_size // 2, num_classes)
         )
 
+    def compute_laplacian_pe_if_needed(self, graphs_2021, graphs_2024, num_nodes, device):
+        """Compute Laplacian PE for GINE model if not already computed"""
+        if self.use_laplacian_pe and self.laplacian_pe_2021 is None:
+            edge_index_2021, edge_attr_2021 = graphs_2021[0]
+            edge_index_2024, edge_attr_2024 = graphs_2024[0]
+
+            self.laplacian_pe_2021 = compute_laplacian_pe(
+                edge_index_2021,
+                edge_attr_2021.squeeze(),
+                num_nodes,
+                k=config.LAPLACIAN_PE_DIM,
+                device=device
+            )
+            self.laplacian_pe_2024 = compute_laplacian_pe(
+                edge_index_2024,
+                edge_attr_2024.squeeze(),
+                num_nodes,
+                k=config.LAPLACIAN_PE_DIM,
+                device=device
+            )
+
     def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, num_nodes, node_indices=None):
         """
         Forward pass
 
         Args:
-            x_2021: Temporal features for 2021 (batch_size, 168, 1) or (num_nodes, 168, 1)
-            x_2024: Temporal features for 2024 (batch_size, 168, 1) or (num_nodes, 168, 1)
+            x_2021: Temporal features for 2021 (batch_size, 168, 2) or (num_nodes, 168, 2)
+            x_2024: Temporal features for 2024 (batch_size, 168, 2) or (num_nodes, 168, 2)
             graphs_2021: List of (edge_index, edge_attr) for 2021
             graphs_2024: List of (edge_index, edge_attr) for 2024
             num_nodes: Total number of nodes
@@ -100,8 +148,8 @@ class EnhancedDualBranchModel(nn.Module):
         """
         # Extract batch features for temporal branch
         if node_indices is not None:
-            x_2021_batch = x_2021[node_indices]  # (batch_size, 168, 1)
-            x_2024_batch = x_2024[node_indices]  # (batch_size, 168, 1)
+            x_2021_batch = x_2021[node_indices]  # (batch_size, 168, 2)
+            x_2024_batch = x_2024[node_indices]  # (batch_size, 168, 2)
         else:
             x_2021_batch = x_2021
             x_2024_batch = x_2024
@@ -117,13 +165,27 @@ class EnhancedDualBranchModel(nn.Module):
         # Stack temporal features: (batch_size, 3, hidden_size)
         temporal_features = torch.stack([temporal_2021, temporal_2024, temporal_diff], dim=1)
 
-        # Extract spatial features (3 features: 2021 + 2024 + diff)
-        spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
-            graphs_2021=graphs_2021,
-            graphs_2024=graphs_2024,
-            num_nodes=num_nodes,
-            node_indices=node_indices
-        )
+        # Extract spatial features
+        if self.use_laplacian_pe:
+            # Compute Laplacian PE if needed
+            self.compute_laplacian_pe_if_needed(graphs_2021, graphs_2024, num_nodes, x_2021.device)
+
+            # GINE forward with Laplacian PE
+            spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
+                graphs_2021=graphs_2021,
+                graphs_2024=graphs_2024,
+                node_features_2021=self.laplacian_pe_2021,
+                node_features_2024=self.laplacian_pe_2024,
+                node_indices=node_indices
+            )
+        else:
+            # GCN/SAGE forward (featureless)
+            spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
+                graphs_2021=graphs_2021,
+                graphs_2024=graphs_2024,
+                num_nodes=num_nodes,
+                node_indices=node_indices
+            )
 
         # Stack spatial features: (batch_size, 3, hidden_size)
         spatial_features = torch.stack([spatial_2021, spatial_2024, spatial_diff], dim=1)
@@ -256,21 +318,23 @@ def extract_features_single(self, x):
     Extract features from a single year's time series
 
     FIXED: Now uses separate LSTMs for hourly and daily processing
+    Updated: Supports 2-feature input [inflow, outflow]
     """
     # Process hourly with dedicated LSTM
     _, (h_hourly_n, _) = self.lstm_hourly(x)
     h_hourly = self.proj_hourly(h_hourly_n[-1])
 
-    # Process daily with dedicated LSTM
-    x_daily = x.view(x.size(0), 7, 24, x.size(2)).mean(dim=2)
+    # Process daily (sum over 24 hours for true daily flow) with dedicated LSTM
+    x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
     _, (h_daily_n, _) = self.lstm_daily(x_daily)
     h_daily = self.proj_daily(h_daily_n[-1])
 
-    # Weekly stats
-    mean = x.mean(dim=1)
-    std = x.std(dim=1)
+    # Weekly stats (sum, max, mean for traffic characteristics)
+    weekly_sum = x.sum(dim=1)      # Total weekly flow
+    weekly_max = x.max(dim=1)[0]   # Peak flow
+    weekly_mean = x.mean(dim=1)    # Average flow
     trend = (x[:, -1, :] - x[:, 0, :]) / 168
-    stats = torch.cat([mean, std, trend], dim=1)
+    stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
     h_weekly = self.weekly_net(stats)
 
     # Concatenate and fuse

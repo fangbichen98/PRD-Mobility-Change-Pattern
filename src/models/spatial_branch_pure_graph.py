@@ -299,9 +299,10 @@ class PureGraphDualYearSAGE(nn.Module):
 
         h = x
 
-        # Apply SAGE layers with log-transformed edge weights
+        # Apply SAGE layers (SAGEConv doesn't support edge_weight parameter)
+        # Note: GraphSAGE aggregates neighbor features without using edge weights
         for sage_layer in self.sage_layers:
-            h = sage_layer(h, edge_index)  # SAGEConv doesn't support edge_weight directly
+            h = sage_layer(h, edge_index)
             h = self.act(h)
             h = self.dropout(h)
 

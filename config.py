@@ -48,7 +48,7 @@ RANDOM_SEED = 42   # Random seed for reproducibility
 # MODEL ARCHITECTURE - TEMPORAL BRANCH
 # ==============================================================================
 # Multi-Scale Temporal Branch (LSTM-based)
-TEMPORAL_INPUT_SIZE = 1  # Input feature dimension: [total_log]
+TEMPORAL_INPUT_SIZE = 2  # Input feature dimension: [total_log]
 LSTM_LAYERS = 3          # Number of LSTM layers
 LSTM_HIDDEN_SIZE = 256   # LSTM hidden units
 LSTM_DROPOUT = 0.4       # LSTM dropout rate
@@ -56,14 +56,14 @@ LSTM_DROPOUT = 0.4       # LSTM dropout rate
 # ==============================================================================
 # MODEL ARCHITECTURE - SPATIAL BRANCH
 # ==============================================================================
-# Pure Graph GCN Branch (featureless learning)
-SPATIAL_LAYERS = 3       # Number of spatial layers (GCN)
-SPATIAL_HIDDEN_SIZE = 128  # Spatial branch hidden units
+# Spatial Branch Options: GCN, GraphSAGE, or GINE
+SPATIAL_MODEL = "GCN"        # Options: "GCN", "SAGE", "GINE"
+SPATIAL_LAYERS = 3           # Number of spatial layers
+SPATIAL_HIDDEN_SIZE = 128    # Spatial branch hidden units
+LAPLACIAN_PE_DIM = 16        # Laplacian Positional Encoding dimension (for GINE)
 # Note: GCN doesn't use attention heads (unlike GAT)
 # Legacy GAT_* parameters are kept for backward compatibility
-GAT_LAYERS = SPATIAL_LAYERS  # Deprecated: Use SPATIAL_LAYERS instead
-GAT_HIDDEN_SIZE = SPATIAL_HIDDEN_SIZE  # Deprecated: Use SPATIAL_HIDDEN_SIZE instead
-GAT_HEADS = 4            # Deprecated: Not used by GCN (only for GAT)
+SPATIAL_HEADS = 4            # Deprecated: Not used by GCN (only for GAT)
 
 # ==============================================================================
 # MODEL ARCHITECTURE - FUSION & CLASSIFICATION
@@ -78,7 +78,7 @@ NUM_CLASSES = 9           # Number of output classes (9 mobility patterns)
 # ==============================================================================
 BATCH_SIZE = 24          # Batch size for training
 LEARNING_RATE = 0.0001    # Initial learning rate
-WEIGHT_DECAY = 5e-4       # L2 regularization
+WEIGHT_DECAY = 1e-3       # L2 regularization
 NUM_EPOCHS = 300          # Maximum number of training epochs
 EARLY_STOPPING_PATIENCE =20  # Stop if no improvement for N epochs
 

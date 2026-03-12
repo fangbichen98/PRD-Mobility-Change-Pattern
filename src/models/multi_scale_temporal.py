@@ -247,7 +247,7 @@ class SimplifiedMultiScaleTemporal(nn.Module):
 
         # Weekly statistics
         self.weekly_net = nn.Sequential(
-            nn.Linear(input_size * 3, 64),
+            nn.Linear(input_size * 4, 64),  # Changed to support 2-feature input: 2 * 4 = 8
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(64, hidden_size)
@@ -276,16 +276,17 @@ class SimplifiedMultiScaleTemporal(nn.Module):
             _, (h_hourly_n, _) = self.lstm_hourly(x)
             h_hourly = self.proj_hourly(h_hourly_n[-1])
 
-            # Process daily (average over 24 hours) with dedicated LSTM
-            x_daily = x.view(x.size(0), 7, 24, x.size(2)).mean(dim=2)
+            # Process daily (sum over 24 hours for true daily flow) with dedicated LSTM
+            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
             _, (h_daily_n, _) = self.lstm_daily(x_daily)
             h_daily = self.proj_daily(h_daily_n[-1])
 
-            # Weekly stats
-            mean = x.mean(dim=1)
-            std = x.std(dim=1)
+            # Weekly stats (sum, max, mean for traffic characteristics)
+            weekly_sum = x.sum(dim=1)      # Total weekly flow
+            weekly_max = x.max(dim=1)[0]   # Peak flow
+            weekly_mean = x.mean(dim=1)    # Average flow
             trend = (x[:, -1, :] - x[:, 0, :]) / 168
-            stats = torch.cat([mean, std, trend], dim=1)
+            stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
             h_weekly = self.weekly_net(stats)
 
             # Fuse multi-scale features for this year

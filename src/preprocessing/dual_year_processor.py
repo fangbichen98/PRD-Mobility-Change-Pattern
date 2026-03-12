@@ -261,24 +261,30 @@ class DualYearDataProcessor:
             flow_2021_raw = flows_2021_raw[grid_id]  # (7, 2)
             flow_2024_raw = flows_2024_raw[grid_id]  # (7, 2)
 
-            # NEW: Use only total flow at each time step (simplified)
-            # This focuses purely on flow intensity changes
+            # NEW: Use inflow and outflow separately (preserves directional information)
+            # This captures both flow intensity and spatial direction
 
-            # Compute total flow for each year
-            # Total = inflow + outflow (flow intensity)
-            total_2021 = flow_2021_raw[:, 0] + flow_2021_raw[:, 1]  # (7,)
-            total_2024 = flow_2024_raw[:, 0] + flow_2024_raw[:, 1]  # (7,)
+            # Extract inflow and outflow for each year
+            # Shape: (7, 2) = [inflow, outflow]
+            inflow_2021 = flow_2021_raw[:, 0]  # (7,)
+            outflow_2021 = flow_2021_raw[:, 1]  # (7,)
+            inflow_2024 = flow_2024_raw[:, 0]  # (7,)
+            outflow_2024 = flow_2024_raw[:, 1]  # (7,)
 
             # Apply log transformation to preserve magnitude
-            total_2021_log = np.log1p(total_2021)
-            total_2024_log = np.log1p(total_2024)
+            inflow_2021_log = np.log1p(inflow_2021)
+            outflow_2021_log = np.log1p(outflow_2021)
+            inflow_2024_log = np.log1p(inflow_2024)
+            outflow_2024_log = np.log1p(outflow_2024)
 
-            # Use only total flow features (no net flow)
-            # Shape: (7, 2) = [total_2021_log, total_2024_log]
+            # Stack features: [inflow_2021, outflow_2021, inflow_2024, outflow_2024]
+            # Shape: (7, 4) = [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]
             combined = np.stack([
-                total_2021_log,
-                total_2024_log
-            ], axis=1)  # (7, 2)
+                inflow_2021_log,
+                outflow_2021_log,
+                inflow_2024_log,
+                outflow_2024_log
+            ], axis=1)  # (7, 4)
 
             change_features[grid_id] = combined
 
@@ -288,7 +294,7 @@ class DualYearDataProcessor:
             logger.info(f"  - Grids without ellipse features: {grids_without_ellipse}")
             logger.info(f"Feature shape per grid: (7, 8) = [total_2021, total_2024, net_2021, net_2024, ecc_2021, area_2021, ecc_2024, area_2024]")
         else:
-            logger.info(f"Feature shape per grid: (7, 2) = [total_2021_log, total_2024_log]")
+            logger.info(f"Feature shape per grid: (7, 4) = [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]")
 
         return change_features
 
