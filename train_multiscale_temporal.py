@@ -205,12 +205,14 @@ def main():
     logger.info("=" * 80)
     logger.info(f"Training started at: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("\nImprovement: Multi-Scale Temporal Branch (hourly + daily + weekly)")
-    logger.info("Expected: +3-5% accuracy")
-    logger.info("Dataset: label_sgh.csv (Shenzhen grids)")
+    logger.info(f"Dataset: {config.LABEL_PATH} with flow threshold {config.FLOW_THRESHOLD} and {config.TIME_STEPS} time steps")
 
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = f"outputs/multiscale_temporal_sgh_{timestamp}"
+    #LABEL_PATH=data/labels_sgh_entropy_0.03_4500.csv
+    label_part = config.LABEL_PATH.split('/')[-1].split('.')[0].split('_')[-2:]
+    label_str = '_'.join(label_part)  # 把最后两个元素拼接成一个字符串
+    output_dir = f"outputs/multiscale_temporal_{timestamp}_{label_str}"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(f"{output_dir}/models", exist_ok=True)
     os.makedirs(f"{output_dir}/metrics", exist_ok=True)
@@ -249,8 +251,9 @@ def main():
     temporal_features_2024 = {}
 
     for grid_id, features in data['change_features'].items():
-        temporal_features_2021[grid_id] = features[:, [0]]  # (168, 1)
-        temporal_features_2024[grid_id] = features[:, [1]]  # (168, 1)
+        # Features shape: (168, 4) = [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]
+        temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2) - [inflow, outflow] for 2021
+        temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2) - [inflow, outflow] for 2024
 
     logger.info(f"✓ Temporal features prepared")
 
@@ -286,11 +289,18 @@ def main():
 
     # Prepare all temporal features as tensors
     num_nodes = len(data['grid_id_to_idx'])
-    all_temporal_2021 = torch.zeros(num_nodes, 168, 1)
-    all_temporal_2024 = torch.zeros(num_nodes, 168, 1)
+    # 1. 动态获取特征维度（从数据字典中随便取一个样本看它的最后一维）
+    first_grid_id = next(iter(temporal_features_2021))
+    feat_dim = torch.tensor(temporal_features_2021[first_grid_id]).shape[-1] 
+    # 这里 feat_dim 会自动变成 2
+
+    # 2. 使用 feat_dim 初始化
+    all_temporal_2021 = torch.zeros(num_nodes, 168, feat_dim)
+    all_temporal_2024 = torch.zeros(num_nodes, 168, feat_dim)
 
     for grid_id, idx in data['grid_id_to_idx'].items():
         if grid_id in temporal_features_2021:
+            # 现在维度匹配了，都是 (168, 2)
             all_temporal_2021[idx] = torch.tensor(temporal_features_2021[grid_id], dtype=torch.float32)
             all_temporal_2024[idx] = torch.tensor(temporal_features_2024[grid_id], dtype=torch.float32)
 
@@ -338,12 +348,17 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
 
+    # Choose spatial model based on config
+    spatial_model = getattr(config, 'SPATIAL_MODEL', 'GCN')
+    logger.info(f"Spatial model: {spatial_model}")
+
     model = EnhancedDualBranchModel(
         temporal_input_size=config.TEMPORAL_INPUT_SIZE,
         hidden_size=config.FUSION_HIDDEN_SIZE,
         num_classes=config.NUM_CLASSES,
         num_time_steps=config.TIME_STEPS,
-        dropout=0.2  # Use original dropout to avoid over-regularization
+        dropout=config.LSTM_DROPOUT,
+        spatial_model=spatial_model
     )
 
     model = model.to(device)
@@ -361,6 +376,9 @@ def main():
     logger.info(f"  - Total parameters: {total_params:,}")
     logger.info(f"  - Trainable parameters: {trainable_params:,}")
     logger.info(f"  - Multi-scale temporal: Hourly + Daily + Weekly")
+    logger.info(f"  - Spatial branch: {spatial_model}")
+    if spatial_model == "GINE":
+        logger.info(f"  - Laplacian PE dimension: {config.LAPLACIAN_PE_DIM}")
     logger.info(f"  - Gated feature fusion: Yes")
 
     # Create loss function
@@ -484,9 +502,9 @@ def main():
             },
             'spatial_branch': {
                 'type': 'Pure Graph GAT',
-                'gat_layers': config.GAT_LAYERS,
-                'gat_hidden_size': config.GAT_HIDDEN_SIZE,
-                'gat_heads': config.GAT_HEADS
+                'gat_layers': config.SPATIAL_LAYERS,
+                'gat_hidden_size': config.SPATIAL_HIDDEN_SIZE,
+                'gat_heads': config.SPATIAL_HEADS
             },
             'fusion': {
                 'type': 'Gated Fusion',
@@ -575,10 +593,10 @@ def main():
         f.write(f"    - LSTM Dropout: {config.LSTM_DROPOUT}\n")
         f.write(f"    - Temporal Input Size: {config.TEMPORAL_INPUT_SIZE}\n")
         f.write(f"  Spatial Branch:\n")
-        f.write(f"    - Type: Pure Graph GAT\n")
-        f.write(f"    - GAT Layers: {config.GAT_LAYERS}\n")
-        f.write(f"    - GAT Hidden Size: {config.GAT_HIDDEN_SIZE}\n")
-        f.write(f"    - GAT Heads: {config.GAT_HEADS}\n")
+        f.write(f"    - Type: Pure Graph GCN\n")
+        f.write(f"    - SPATIAL Layers: {config.SPATIAL_LAYERS}\n")
+        f.write(f"    - SPATIAL Hidden Size: {config.SPATIAL_HIDDEN_SIZE}\n")
+        f.write(f"    - SPATIAL Heads: {config.SPATIAL_HEADS}\n")
         f.write(f"  Fusion:\n")
         f.write(f"    - Type: Gated Fusion\n")
         f.write(f"    - Fusion Hidden Size: {config.FUSION_HIDDEN_SIZE}\n")

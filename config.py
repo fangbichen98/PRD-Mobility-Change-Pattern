@@ -15,14 +15,14 @@ DATA_DIR = "data"
 OD_2021_PATH = os.path.join(DATA_DIR, "2021_sgh_week.csv")
 OD_2024_PATH = os.path.join(DATA_DIR, "2024_sgh_week.csv")
 GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "sgh_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "label_sgh.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "labels_sgh_entropy_0.03_random.csv")
 
 # ==============================================================================
 # DATA PREPROCESSING
 # ==============================================================================
 TRAIN_DAYS = 7  # Use first 7 days for training
 TIME_STEPS = 168  # 168 hourly snapshots (7 days × 24 hours)
-FLOW_THRESHOLD = 0.0  # OPTIMAL VALUE - extensively tested [5.0, 7.5, 9.0, 10.0, 11.0, 12.0], 10.0 is best with 65.74% accuracy
+FLOW_THRESHOLD = 0.0  # Graph edge threshold (reduce edges for memory)
 SPP_LEVELS = [1, 2, 4]  # Spatial pyramid pooling levels for temporal branch
 
 # Graph construction parameters (used by graph_builder.py)
@@ -48,7 +48,7 @@ RANDOM_SEED = 42   # Random seed for reproducibility
 # MODEL ARCHITECTURE - TEMPORAL BRANCH
 # ==============================================================================
 # Multi-Scale Temporal Branch (LSTM-based)
-TEMPORAL_INPUT_SIZE = 2  # Input feature dimension: [total_log]
+TEMPORAL_INPUT_SIZE = 2  # Input feature dimension: 
 LSTM_LAYERS = 3          # Number of LSTM layers
 LSTM_HIDDEN_SIZE = 256   # LSTM hidden units
 LSTM_DROPOUT = 0.4       # LSTM dropout rate
@@ -76,7 +76,7 @@ NUM_CLASSES = 9           # Number of output classes (9 mobility patterns)
 # ==============================================================================
 # TRAINING HYPERPARAMETERS
 # ==============================================================================
-BATCH_SIZE = 24          # Batch size for training
+BATCH_SIZE = 12          # Batch size for training (reduced for memory)
 LEARNING_RATE = 0.0001    # Initial learning rate
 WEIGHT_DECAY = 1e-3       # L2 regularization
 NUM_EPOCHS = 300          # Maximum number of training epochs
