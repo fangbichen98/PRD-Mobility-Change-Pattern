@@ -229,16 +229,16 @@ class DualYearDataProcessor:
         NEW: Optionally integrates ellipse features for direction modeling
 
         Args:
-            flows_2021_raw: Raw grid flows for 2021 {grid_id: array(7, 2)}
-            flows_2024_raw: Raw grid flows for 2024 {grid_id: array(7, 2)}
+            flows_2021_raw: Raw grid flows for 2021 {grid_id: array(168, 2)}
+            flows_2024_raw: Raw grid flows for 2024 {grid_id: array(168, 2)}
             flows_2021_norm: Not used (kept for compatibility)
             flows_2024_norm: Not used (kept for compatibility)
             ellipse_data: Ellipse data dictionary (from JSON), optional
 
         Returns:
             Dictionary with change features for each grid
-            Shape: (7, 4) without ellipse or (7, 8) with ellipse
-            Without: [2021_total_log, 2024_total_log, 2021_net_flow_log, 2024_net_flow_log]
+            Shape: (168, 4) without ellipse or (168, 8) with ellipse
+            Without: [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]
             With: [..., eccentricity_2021, log_area_2021, eccentricity_2024, log_area_2024]
         """
         logger.info("Computing temporal change features with log transformation")
@@ -257,15 +257,15 @@ class DualYearDataProcessor:
                 logger.warning(f"Grid {grid_id} not found in 2024 data, skipping")
                 continue
 
-            # Get raw flows (7, 2) - [inflow, outflow]
-            flow_2021_raw = flows_2021_raw[grid_id]  # (7, 2)
-            flow_2024_raw = flows_2024_raw[grid_id]  # (7, 2)
+            # Get raw flows (168, 2) - [inflow, outflow]
+            flow_2021_raw = flows_2021_raw[grid_id]  # (168, 2)
+            flow_2024_raw = flows_2024_raw[grid_id]  # (168, 2)
 
             # NEW: Use inflow and outflow separately (preserves directional information)
             # This captures both flow intensity and spatial direction
 
             # Extract inflow and outflow for each year
-            # Shape: (7, 2) = [inflow, outflow]
+            # Shape: (168, 2) = [inflow, outflow]
             inflow_2021 = flow_2021_raw[:, 0]  # (7,)
             outflow_2021 = flow_2021_raw[:, 1]  # (7,)
             inflow_2024 = flow_2024_raw[:, 0]  # (7,)
@@ -278,13 +278,13 @@ class DualYearDataProcessor:
             outflow_2024_log = np.log1p(outflow_2024)
 
             # Stack features: [inflow_2021, outflow_2021, inflow_2024, outflow_2024]
-            # Shape: (7, 4) = [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]
+            # Shape: (168, 4) = [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]
             combined = np.stack([
                 inflow_2021_log,
                 outflow_2021_log,
                 inflow_2024_log,
                 outflow_2024_log
-            ], axis=1)  # (7, 4)
+            ], axis=1)  # (168, 4)
 
             change_features[grid_id] = combined
 
@@ -292,9 +292,9 @@ class DualYearDataProcessor:
         if ellipse_data is not None:
             logger.info(f"  - Grids with ellipse features: {grids_with_ellipse}")
             logger.info(f"  - Grids without ellipse features: {grids_without_ellipse}")
-            logger.info(f"Feature shape per grid: (7, 8) = [total_2021, total_2024, net_2021, net_2024, ecc_2021, area_2021, ecc_2024, area_2024]")
+            logger.info(f"Feature shape per grid: (168, 8) = [inflow_2021, outflow_2021, inflow_2024, outflow_2024, ecc_2021, area_2021, ecc_2024, area_2024]")
         else:
-            logger.info(f"Feature shape per grid: (7, 4) = [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]")
+            logger.info(f"Feature shape per grid: (168, 4) = [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]")
 
         return change_features
 
@@ -436,6 +436,73 @@ class DualYearDataProcessor:
         return features_dict
 
 
+def _build_daily_graph_sequence_from_static(
+        od_df: pd.DataFrame,
+        edge_index: np.ndarray,
+        edge_weights: np.ndarray,
+        grid_id_to_idx: dict,
+        train_days: int) -> list:
+    """
+    Build daily discrete graph snapshots using fixed topology and dynamic edge weights.
+
+    Dynamic strategy:
+    - Keep edge_index fixed (derived from the static graph/top-k graph).
+    - Recompute daily edge weights for OD edges.
+    - Preserve static weights for non-OD fallback edges (e.g., KNN edges).
+    - Preserve static self-loop weights when a daily edge weight is zero.
+    """
+    num_edges = edge_index.shape[1]
+    edge_weights = edge_weights.astype(np.float32)
+
+    edge_pos = {(int(edge_index[0, i]), int(edge_index[1, i])): i for i in range(num_edges)}
+    self_loop_mask = edge_index[0] == edge_index[1]
+
+    od_df = od_df.copy()
+    if not np.issubdtype(od_df['date_dt'].dtype, np.datetime64):
+        od_df['date_dt'] = pd.to_datetime(od_df['date_dt'])
+
+    min_date = od_df['date_dt'].min()
+    od_df['day_idx'] = (od_df['date_dt'] - min_date).dt.days
+    od_df = od_df[(od_df['day_idx'] >= 0) & (od_df['day_idx'] < train_days)]
+
+    grouped = od_df.groupby(['day_idx', 'o_grid_500', 'd_grid_500'])['num_total'].sum().reset_index()
+
+    day_to_updates = {day: [] for day in range(train_days)}
+    od_edge_positions = set()
+
+    for row in grouped.itertuples(index=False):
+        if row.o_grid_500 not in grid_id_to_idx or row.d_grid_500 not in grid_id_to_idx:
+            continue
+        src = grid_id_to_idx[row.o_grid_500]
+        dst = grid_id_to_idx[row.d_grid_500]
+        pos = edge_pos.get((src, dst))
+        if pos is None:
+            continue
+        day_to_updates[int(row.day_idx)].append((pos, float(row.num_total)))
+        od_edge_positions.add(pos)
+
+    non_od_mask = np.ones(num_edges, dtype=bool)
+    if od_edge_positions:
+        non_od_mask[list(od_edge_positions)] = False
+
+    graphs = []
+    for day in range(train_days):
+        day_weights = np.zeros(num_edges, dtype=np.float32)
+        for pos, val in day_to_updates[day]:
+            day_weights[pos] = val
+
+        # Keep static weights for non-OD fallback edges (e.g., KNN fallback edges).
+        day_weights[non_od_mask] = edge_weights[non_od_mask]
+
+        # Keep self-loop weights stable when daily OD is absent.
+        zero_self_loop_mask = self_loop_mask & (day_weights <= 0)
+        day_weights[zero_self_loop_mask] = edge_weights[zero_self_loop_mask]
+
+        graphs.append((edge_index.copy(), day_weights))
+
+    return graphs
+
+
 def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_cache=True, cache_dir='data/cache'):
     """
     Prepare complete dataset for dual-year experiment with caching support
@@ -454,10 +521,15 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     import pickle
     import hashlib
     from src.preprocessing.data_processor import GridMetadataProcessor
-    from src.preprocessing.graph_builder import SpatialGraphBuilder, DynamicGraphBuilder
+    from src.preprocessing.graph_builder import SpatialGraphBuilder
 
-    # Create cache directory
-    os.makedirs(cache_dir, exist_ok=True)
+    # Two-level cache layout:
+    # 1) feature cache: labels + temporal features
+    # 2) graph cache: graph structure (with base graph reuse for top-k variants)
+    feature_cache_dir = os.path.join(cache_dir, 'features')
+    graph_cache_dir = os.path.join(cache_dir, 'graphs')
+    os.makedirs(feature_cache_dir, exist_ok=True)
+    os.makedirs(graph_cache_dir, exist_ok=True)
 
     # Generate cache key with file content hash and modification times
     # Strategy: Use content hash for label file (small), mtime for OD data files (large)
@@ -480,55 +552,36 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     else:
         data_2024_mtime = 0
 
-    # 3. Generate cache key
+    metadata_path = config.GRID_METADATA_PATH
+    metadata_mtime = int(os.path.getmtime(metadata_path)) if os.path.exists(metadata_path) else 0
+
+    # Feature cache key excludes graph hyperparameters so top-k sweeps can reuse temporal preprocessing.
     label_basename = os.path.basename(label_path)
-    # Include FLOW_THRESHOLD in cache key to ensure graph rebuild when threshold changes
-    cache_key = f"{label_basename}_{label_content_hash}_samples_{samples_per_class}_data_{data_2021_mtime}_{data_2024_mtime}_threshold_{config.FLOW_THRESHOLD}_v4"
-    cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:12]  # Use 12-char hash for better uniqueness
+    feature_cache_key = (
+        f"{label_basename}_{label_content_hash}_samples_{samples_per_class}_"
+        f"seed_{config.RANDOM_SEED}_days_{config.TRAIN_DAYS}_"
+        f"data_{data_2021_mtime}_{data_2024_mtime}_v2"
+    )
+    feature_cache_hash = hashlib.md5(feature_cache_key.encode()).hexdigest()[:12]
+    feature_cache_file = os.path.join(feature_cache_dir, f"dual_year_features_{feature_cache_hash}.pkl")
 
-    cache_file = os.path.join(cache_dir, f"dual_year_data_{cache_hash}.pkl")
-    cache_info_file = os.path.join(cache_dir, f"dual_year_data_{cache_hash}_info.txt")
+    # Graph base cache key excludes top-k; derived top-k graphs are generated from this base cache.
+    graph_base_key = (
+        f"meta_{metadata_mtime}_days_{config.TRAIN_DAYS}_"
+        f"data_{data_2021_mtime}_{data_2024_mtime}_threshold_{config.FLOW_THRESHOLD}_base_v2"
+    )
+    graph_base_hash = hashlib.md5(graph_base_key.encode()).hexdigest()[:12]
+    graph_base_cache_file = os.path.join(graph_cache_dir, f"dual_year_graph_base_{graph_base_hash}.pkl")
 
-    # Try to load from cache
-    if use_cache and os.path.exists(cache_file):
-        logger.info("=" * 80)
-        logger.info("Loading Preprocessed Data from Cache")
-        logger.info("=" * 80)
-        logger.info(f"Cache file: {cache_file}")
+    graph_temporal_mode = getattr(config, 'GRAPH_TEMPORAL_MODE', 'static')
+    graph_variant_key = (
+        f"base_{graph_base_hash}_topkout_{config.GRAPH_TOPK_OUT}_topkin_{config.GRAPH_TOPK_IN}_"
+        f"temporal_{graph_temporal_mode}_v3"
+    )
+    graph_variant_hash = hashlib.md5(graph_variant_key.encode()).hexdigest()[:12]
+    graph_variant_cache_file = os.path.join(graph_cache_dir, f"dual_year_graph_variant_{graph_variant_hash}.pkl")
 
-        try:
-            import time
-            load_start = time.time()
-
-            with open(cache_file, 'rb') as f:
-                data = pickle.load(f)
-
-            load_time = time.time() - load_start
-
-            # Validate cache integrity
-            required_keys = ['labels', 'change_features', 'graphs_2021', 'graphs_2024', 'class_weights']
-            missing_keys = [k for k in required_keys if k not in data]
-            if missing_keys:
-                logger.warning(f"Cache is missing keys: {missing_keys}")
-                logger.info("Regenerating cache...")
-                # Continue to regenerate cache
-            else:
-                # Display cache info
-                if os.path.exists(cache_info_file):
-                    with open(cache_info_file, 'r') as f:
-                        logger.info(f.read())
-
-                logger.info("✓ Successfully loaded cached data!")
-                logger.info(f"  - Total grids: {len(data['labels'])}")
-                logger.info(f"  - Graphs 2021: {len(data['graphs_2021'])} daily snapshots")
-                logger.info(f"  - Graphs 2024: {len(data['graphs_2024'])} daily snapshots")
-                logger.info(f"  - Load time: {load_time:.2f} seconds")
-                logger.info("=" * 80)
-                return data
-
-        except Exception as e:
-            logger.warning(f"Failed to load cache: {e}")
-            logger.info("Proceeding with fresh data preparation...")
+    feature_data = None
 
     logger.info("=" * 80)
     logger.info("Dual-Year Experiment Data Preparation")
@@ -537,170 +590,312 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     logger.info(f"Samples per class: {samples_per_class if samples_per_class else 'ALL'}")
     logger.info("")
 
-    # Load metadata
+    # Load metadata (fast enough to do every run; reused by both cache levels)
     logger.info("Loading grid metadata...")
     metadata_processor = GridMetadataProcessor()
     metadata_df = metadata_processor.load_and_validate()
     valid_grid_ids = metadata_processor.get_valid_grid_ids(metadata_df)
 
-    # Load labels
-    logger.info(f"Loading labels from {label_path}...")
-    label_df = pd.read_csv(label_path)
-    label_df = label_df[label_df['grid_id'].isin(valid_grid_ids)]
-    label_df = label_df[label_df['label'].between(1, 9)]
+    # ----------------------------
+    # Level-1 cache: feature data
+    # ----------------------------
+    if use_cache and os.path.exists(feature_cache_file):
+        logger.info("=" * 80)
+        logger.info("Loading Feature Cache (Level-1)")
+        logger.info("=" * 80)
+        logger.info(f"Feature cache file: {feature_cache_file}")
+        try:
+            with open(feature_cache_file, 'rb') as f:
+                feature_data = pickle.load(f)
+            logger.info("✓ Feature cache hit")
+            logger.info(f"  - Total labeled grids: {len(feature_data['labels'])}")
+        except Exception as e:
+            logger.warning(f"Failed to load feature cache: {e}")
+            feature_data = None
 
-    # Sample or use all labels
-    if samples_per_class is not None:
-        logger.info(f"Sampling {samples_per_class} samples per class...")
-        sampled_dfs = []
-        for label in range(1, config.NUM_CLASSES + 1):
-            class_df = label_df[label_df['label'] == label]
-            if len(class_df) >= samples_per_class:
-                sampled = class_df.sample(n=samples_per_class, random_state=config.RANDOM_SEED)
-            else:
-                logger.warning(f"Class {label} has only {len(class_df)} samples, using all")
-                sampled = class_df
+    if feature_data is None:
+        # Load labels
+        logger.info(f"Loading labels from {label_path}...")
+        label_df = pd.read_csv(label_path)
+        label_df = label_df[label_df['grid_id'].isin(valid_grid_ids)]
+        label_df = label_df[label_df['label'].between(1, 9)]
 
-            sampled_dfs.append(sampled)
+        # Sample or use all labels
+        if samples_per_class is not None:
+            logger.info(f"Sampling {samples_per_class} samples per class...")
+            sampled_dfs = []
+            for label in range(1, config.NUM_CLASSES + 1):
+                class_df = label_df[label_df['label'] == label]
+                if len(class_df) >= samples_per_class:
+                    sampled = class_df.sample(n=samples_per_class, random_state=config.RANDOM_SEED)
+                else:
+                    logger.warning(f"Class {label} has only {len(class_df)} samples, using all")
+                    sampled = class_df
 
-        label_df = pd.concat(sampled_dfs, ignore_index=True)
-    else:
-        logger.info("Using all available labels (no sampling)")
+                sampled_dfs.append(sampled)
 
-    label_df['label_idx'] = label_df['label'] - 1
+            label_df = pd.concat(sampled_dfs, ignore_index=True)
+        else:
+            logger.info("Using all available labels (no sampling)")
 
-    labels = dict(zip(label_df['grid_id'], label_df['label_idx']))
-    sampled_grid_ids = set(labels.keys())
+        label_df['label_idx'] = label_df['label'] - 1
 
-    # Compute class weights for imbalanced data
-    class_counts = label_df['label_idx'].value_counts().sort_index()
-    total_samples = len(label_df)
-    class_weights = torch.FloatTensor([
-        total_samples / (config.NUM_CLASSES * class_counts[i])
-        for i in range(config.NUM_CLASSES)
-    ])
+        labels = dict(zip(label_df['grid_id'], label_df['label_idx']))
+        sampled_grid_ids = set(labels.keys())
 
-    logger.info(f"Total samples: {len(labels)} grids across {config.NUM_CLASSES} classes")
-    logger.info("Class distribution:")
-    for i in range(config.NUM_CLASSES):
-        count = class_counts.get(i, 0)
-        weight = class_weights[i].item()
-        logger.info(f"  Class {i+1}: {count} samples (weight: {weight:.4f})")
+        # Compute class weights for imbalanced data
+        class_counts = label_df['label_idx'].value_counts().sort_index()
+        total_samples = len(label_df)
+        class_weights = torch.FloatTensor([
+            total_samples / (config.NUM_CLASSES * class_counts[i])
+            for i in range(config.NUM_CLASSES)
+        ])
 
-    # Prepare dual-year data
-    dual_year_processor = DualYearDataProcessor(year1=2021, year2=2024)
-    dual_year_data = dual_year_processor.prepare_dual_year_data(sampled_grid_ids, valid_grid_ids)
+        logger.info(f"Total samples: {len(labels)} grids across {config.NUM_CLASSES} classes")
+        logger.info("Class distribution:")
+        for i in range(config.NUM_CLASSES):
+            count = class_counts.get(i, 0)
+            weight = class_weights[i].item()
+            logger.info(f"  Class {i+1}: {count} samples (weight: {weight:.4f})")
 
-    # Build spatial graph builder
-    # CRITICAL FIX: Use GLOBAL metadata for complete graph structure
-    # Spatial branch (GCN/GraphSAGE) uses featureless learning (all-1 features),
-    # so we don't need to extract temporal features for all nodes.
-    logger.info("Building spatial graphs...")
+        # Prepare dual-year temporal data
+        dual_year_processor = DualYearDataProcessor(year1=2021, year2=2024)
+        dual_year_data = dual_year_processor.prepare_dual_year_data(sampled_grid_ids, valid_grid_ids)
+
+        feature_data = {
+            'labels': labels,
+            'change_features': dual_year_data['change_features'],
+            'flows_2021': dual_year_data['flows_2021'],
+            'flows_2024': dual_year_data['flows_2024'],
+            'train_flow_grid_ids': sorted(dual_year_data['flows_2021'].keys()),
+            'norm_params_2021': dual_year_data['norm_params_2021'],
+            'norm_params_2024': dual_year_data['norm_params_2024'],
+            'label_df': label_df,
+            'class_weights': class_weights,
+            'label_file_name': label_path,
+            'label_file_hash': label_content_hash,
+            'class_distribution': class_counts.to_dict()
+        }
+
+        if use_cache:
+            try:
+                with open(feature_cache_file, 'wb') as f:
+                    pickle.dump(feature_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+                logger.info("✓ Feature cache saved")
+                logger.info(f"  - Path: {feature_cache_file}")
+            except Exception as e:
+                logger.warning(f"Failed to save feature cache: {e}")
+
+    labels = feature_data['labels']
+    class_weights = feature_data['class_weights']
+
+    # -------------------------
+    # Level-2 cache: graph data
+    # -------------------------
+    logger.info("Building/loading spatial graphs...")
     logger.info(f"CRITICAL FIX: Using GLOBAL metadata (all {len(metadata_df)} grids)")
-    logger.info("  → Spatial branch uses featureless learning (all-1 features)")
-    logger.info("  → Temporal features only needed for labeled nodes (LSTM branch)")
 
-    # Use full metadata for graph builder (preserves global graph topology)
     graph_builder = SpatialGraphBuilder(metadata_df, k_neighbors=8)
 
-    # Build static flow-only graphs (1 aggregated graph per year)
-    # CRITICAL FIX: Don't use include_neighbors filtering - load complete global graph
-    logger.info(f"Building GLOBAL flow-only graphs with threshold={config.FLOW_THRESHOLD}")
-    logger.info("  → Using ALL edges in OD data (no edge filtering)")
-    logger.info("  → Preserving complete graph topology for multi-hop message passing")
+    graph_cache_data = None
+    if use_cache and os.path.exists(graph_variant_cache_file):
+        logger.info("=" * 80)
+        logger.info("Loading Graph Cache (Level-2 variant)")
+        logger.info("=" * 80)
+        logger.info(f"Graph cache file: {graph_variant_cache_file}")
+        try:
+            with open(graph_variant_cache_file, 'rb') as f:
+                graph_cache_data = pickle.load(f)
+            logger.info("✓ Graph variant cache hit")
+        except Exception as e:
+            logger.warning(f"Failed to load graph variant cache: {e}")
+            graph_cache_data = None
 
-    edge_index_2021, edge_weights_2021 = graph_builder.build_flow_graph(
-        dual_year_data['od_2021'],
-        threshold=config.FLOW_THRESHOLD,
-        include_neighbors=False  # CRITICAL: Don't filter edges! Load complete graph.
-    )
-    edge_index_2024, edge_weights_2024 = graph_builder.build_flow_graph(
-        dual_year_data['od_2024'],
-        threshold=config.FLOW_THRESHOLD,
-        include_neighbors=False  # CRITICAL: Don't filter edges! Load complete graph.
-    )
+    if graph_cache_data is None:
+        base_graph_data = None
+        if use_cache and os.path.exists(graph_base_cache_file):
+            logger.info("=" * 80)
+            logger.info("Loading Graph Base Cache")
+            logger.info("=" * 80)
+            logger.info(f"Graph base cache file: {graph_base_cache_file}")
+            try:
+                with open(graph_base_cache_file, 'rb') as f:
+                    base_graph_data = pickle.load(f)
+                logger.info("✓ Graph base cache hit")
+            except Exception as e:
+                logger.warning(f"Failed to load graph base cache: {e}")
+                base_graph_data = None
 
-    # Wrap in single-element lists for compatibility with existing code
-    graphs_2021 = [(edge_index_2021, edge_weights_2021)]
-    graphs_2024 = [(edge_index_2024, edge_weights_2024)]
+        if base_graph_data is None:
+            logger.info("Graph base cache miss: building base graphs from OD data (no top-k)")
+            logger.info("  → This is done once per data version; top-k variants will reuse it")
 
-    # Build a static graph for compatibility (using 2024 data)
-    # Note: This is the same as graphs_2024[0] but kept for backward compatibility
-    edge_index, edge_weights = edge_index_2024, edge_weights_2024
+            dual_year_processor_for_graph = DualYearDataProcessor(year1=2021, year2=2024)
 
-    # Create grid_id to index mapping
-    grid_id_to_idx = graph_builder.grid_id_to_idx
+            # For base graph construction, labels are irrelevant; we only need global OD and valid nodes.
+            od_2021 = dual_year_processor_for_graph.load_year_data(2021, valid_grid_ids)
+            od_2021 = dual_year_processor_for_graph.filter_training_period(od_2021, config.TRAIN_DAYS)
+            od_2021 = od_2021[od_2021['o_grid_500'].isin(valid_grid_ids) &
+                              od_2021['d_grid_500'].isin(valid_grid_ids)]
+
+            od_2024 = dual_year_processor_for_graph.load_year_data(2024, valid_grid_ids)
+            od_2024 = dual_year_processor_for_graph.filter_training_period(od_2024, config.TRAIN_DAYS)
+            od_2024 = od_2024[od_2024['o_grid_500'].isin(valid_grid_ids) &
+                              od_2024['d_grid_500'].isin(valid_grid_ids)]
+
+            # Build base graphs without top-k; this cache is reused for all top-k variants.
+            edge_index_2021_base, edge_weights_2021_base = graph_builder.build_flow_graph(
+                od_2021,
+                threshold=config.FLOW_THRESHOLD,
+                include_neighbors=False,
+                topk_out=None,
+                topk_in=None
+            )
+            edge_index_2024_base, edge_weights_2024_base = graph_builder.build_flow_graph(
+                od_2024,
+                threshold=config.FLOW_THRESHOLD,
+                include_neighbors=False,
+                topk_out=None,
+                topk_in=None
+            )
+
+            base_graph_data = {
+                'edge_index_2021_base': edge_index_2021_base,
+                'edge_weights_2021_base': edge_weights_2021_base,
+                'edge_index_2024_base': edge_index_2024_base,
+                'edge_weights_2024_base': edge_weights_2024_base,
+                'grid_id_to_idx': graph_builder.grid_id_to_idx
+            }
+
+            if use_cache:
+                try:
+                    with open(graph_base_cache_file, 'wb') as f:
+                        pickle.dump(base_graph_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+                    logger.info("✓ Graph base cache saved")
+                    logger.info(f"  - Path: {graph_base_cache_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to save graph base cache: {e}")
+
+        # Derive requested top-k variant from base graph.
+        if config.GRAPH_TOPK_OUT is None and config.GRAPH_TOPK_IN is None:
+            edge_index_2021 = base_graph_data['edge_index_2021_base']
+            edge_weights_2021 = base_graph_data['edge_weights_2021_base']
+            edge_index_2024 = base_graph_data['edge_index_2024_base']
+            edge_weights_2024 = base_graph_data['edge_weights_2024_base']
+        else:
+            logger.info(f"Deriving top-k variant from base graph: out={config.GRAPH_TOPK_OUT}, in={config.GRAPH_TOPK_IN}")
+            edge_index_2021, edge_weights_2021 = graph_builder._apply_nodewise_topk(
+                base_graph_data['edge_index_2021_base'],
+                base_graph_data['edge_weights_2021_base'],
+                topk_out=config.GRAPH_TOPK_OUT,
+                topk_in=config.GRAPH_TOPK_IN
+            )
+            edge_index_2024, edge_weights_2024 = graph_builder._apply_nodewise_topk(
+                base_graph_data['edge_index_2024_base'],
+                base_graph_data['edge_weights_2024_base'],
+                topk_out=config.GRAPH_TOPK_OUT,
+                topk_in=config.GRAPH_TOPK_IN
+            )
+
+        if graph_temporal_mode == 'daily':
+            logger.info("Building daily discrete graph snapshots (fixed topology + dynamic edge weights)")
+
+            dual_year_processor_for_graph = DualYearDataProcessor(year1=2021, year2=2024)
+
+            od_2021_daily = dual_year_processor_for_graph.load_year_data(2021, valid_grid_ids)
+            od_2021_daily = dual_year_processor_for_graph.filter_training_period(od_2021_daily, config.TRAIN_DAYS)
+            od_2021_daily = od_2021_daily[
+                od_2021_daily['o_grid_500'].isin(valid_grid_ids) &
+                od_2021_daily['d_grid_500'].isin(valid_grid_ids)
+            ]
+
+            od_2024_daily = dual_year_processor_for_graph.load_year_data(2024, valid_grid_ids)
+            od_2024_daily = dual_year_processor_for_graph.filter_training_period(od_2024_daily, config.TRAIN_DAYS)
+            od_2024_daily = od_2024_daily[
+                od_2024_daily['o_grid_500'].isin(valid_grid_ids) &
+                od_2024_daily['d_grid_500'].isin(valid_grid_ids)
+            ]
+
+            graphs_2021 = _build_daily_graph_sequence_from_static(
+                od_df=od_2021_daily,
+                edge_index=edge_index_2021,
+                edge_weights=edge_weights_2021,
+                grid_id_to_idx=base_graph_data['grid_id_to_idx'],
+                train_days=config.TRAIN_DAYS
+            )
+            graphs_2024 = _build_daily_graph_sequence_from_static(
+                od_df=od_2024_daily,
+                edge_index=edge_index_2024,
+                edge_weights=edge_weights_2024,
+                grid_id_to_idx=base_graph_data['grid_id_to_idx'],
+                train_days=config.TRAIN_DAYS
+            )
+        else:
+            graphs_2021 = [(edge_index_2021, edge_weights_2021)]
+            graphs_2024 = [(edge_index_2024, edge_weights_2024)]
+
+        graph_cache_data = {
+            'graphs_2021': graphs_2021,
+            'graphs_2024': graphs_2024,
+            'edge_index': edge_index_2024,
+            'edge_weights': edge_weights_2024,
+            'grid_id_to_idx': base_graph_data['grid_id_to_idx'],
+            'graph_temporal_mode': graph_temporal_mode
+        }
+
+        if use_cache:
+            try:
+                with open(graph_variant_cache_file, 'wb') as f:
+                    pickle.dump(graph_cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+                logger.info("✓ Graph variant cache saved")
+                logger.info(f"  - Path: {graph_variant_cache_file}")
+            except Exception as e:
+                logger.warning(f"Failed to save graph variant cache: {e}")
+
+    graphs_2021 = graph_cache_data['graphs_2021']
+    graphs_2024 = graph_cache_data['graphs_2024']
+    edge_index = graph_cache_data['edge_index']
+    edge_weights = graph_cache_data['edge_weights']
+    grid_id_to_idx = graph_cache_data['grid_id_to_idx']
 
     logger.info(f"\n✓ CRITICAL FIX APPLIED:")
     logger.info(f"  - Global graph nodes: {len(grid_id_to_idx)} (from {len(metadata_df)} metadata)")
     logger.info(f"  - Labeled nodes for training: {len(labels)}")
     logger.info(f"  - Unlabeled nodes in graph: {len(grid_id_to_idx) - len(labels)}")
-    logger.info(f"  - Static flow graph 2021: {graphs_2021[0][0].shape[1]} edges")
-    logger.info(f"  - Static flow graph 2024: {graphs_2024[0][0].shape[1]} edges")
+    logger.info(f"  - Graph temporal mode: {graph_temporal_mode}")
+    logger.info(f"  - Graph snapshots per year: {len(graphs_2021)}")
+    logger.info(f"  - Graph 2021 edges (snapshot0): {graphs_2021[0][0].shape[1]}")
+    logger.info(f"  - Graph 2024 edges (snapshot0): {graphs_2024[0][0].shape[1]}")
     logger.info(f"\nArchitecture:")
-    logger.info(f"  - Temporal Branch (LSTM): Uses {len(labels)} labeled nodes with (7, 2) features")
+    logger.info(f"  - Temporal Branch (LSTM): Uses {len(labels)} labeled nodes with (168, 2) features")
     logger.info(f"  - Spatial Branch (GCN/SAGE): Uses {len(grid_id_to_idx)} nodes with all-1 features")
-    logger.info(f"  - Feature dimension per labeled node: {list(dual_year_data['change_features'].values())[0].shape}")
+    logger.info(f"  - Feature dimension per labeled node: {list(feature_data['change_features'].values())[0].shape}")
 
     data = {
         'metadata_df': metadata_df,  # CRITICAL FIX: Use full metadata (global graph)
-        'labels': labels,
-        'change_features': dual_year_data['change_features'],
-        'flows_2021': dual_year_data['flows_2021'],
-        'flows_2024': dual_year_data['flows_2024'],
+        'labels': feature_data['labels'],
+        'change_features': feature_data['change_features'],
+        'flows_2021': feature_data['flows_2021'],
+        'flows_2024': feature_data['flows_2024'],
+        'train_flow_grid_ids': feature_data.get('train_flow_grid_ids', sorted(feature_data['flows_2021'].keys())),
         'edge_index': edge_index,  # Static graph for compatibility
         'edge_weights': edge_weights,
         'graphs_2021': graphs_2021,  # NEW: Dynamic graphs for 2021
         'graphs_2024': graphs_2024,  # NEW: Dynamic graphs for 2024
         'grid_id_to_idx': grid_id_to_idx,
-        'norm_params_2021': dual_year_data['norm_params_2021'],
-        'norm_params_2024': dual_year_data['norm_params_2024'],
-        'label_df': label_df,
-        'class_weights': class_weights,
-        'label_file_name': label_path,  # Store label file path
-        'label_file_hash': label_content_hash,  # Store label file hash
-        'class_distribution': class_counts.to_dict()  # Store class distribution
+        'norm_params_2021': feature_data['norm_params_2021'],
+        'norm_params_2024': feature_data['norm_params_2024'],
+        'label_df': feature_data['label_df'],
+        'class_weights': feature_data['class_weights'],
+        'label_file_name': feature_data['label_file_name'],
+        'label_file_hash': feature_data['label_file_hash'],
+        'class_distribution': feature_data['class_distribution']
     }
 
-    # Save to cache
-    if use_cache:
-        logger.info(f"\nSaving preprocessed data to cache...")
-        logger.info(f"Cache file: {cache_file}")
-
-        try:
-            with open(cache_file, 'wb') as f:
-                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-            # Save cache info
-            with open(cache_info_file, 'w') as f:
-                f.write(f"Cache Information:\n")
-                f.write(f"  Label file: {label_path}\n")
-                f.write(f"  Label file hash: {label_content_hash}\n")
-                f.write(f"  Data 2021 mtime: {data_2021_mtime}\n")
-                f.write(f"  Data 2024 mtime: {data_2024_mtime}\n")
-                f.write(f"  Samples per class: {samples_per_class if samples_per_class else 'ALL'}\n")
-                f.write(f"  Total grids: {len(labels)}\n")
-                f.write(f"  Static flow graph 2021: {graphs_2021[0][0].shape[1]} edges\n")
-                f.write(f"  Static flow graph 2024: {graphs_2024[0][0].shape[1]} edges\n")
-                f.write(f"  Flow threshold: {config.FLOW_THRESHOLD}\n")
-                f.write(f"  Feature shape: {list(dual_year_data['change_features'].values())[0].shape}\n")
-                f.write(f"  Class distribution:\n")
-                for i in range(config.NUM_CLASSES):
-                    count = class_counts.get(i, 0)
-                    weight = class_weights[i].item()
-                    f.write(f"    Class {i+1}: {count} samples (weight: {weight:.4f})\n")
-
-            # Get cache file size
-            cache_size_mb = os.path.getsize(cache_file) / (1024 * 1024)
-
-            logger.info("✓ Cache saved successfully!")
-            logger.info(f"  Cache size: {cache_size_mb:.2f} MB")
-            logger.info(f"  Cache location: {os.path.abspath(cache_file)}")
-            logger.info(f"  Next run will load from cache in ~1 second")
-
-        except Exception as e:
-            logger.warning(f"Failed to save cache: {e}")
-            logger.info("Continuing without cache...")
+    logger.info("\nTwo-level cache summary:")
+    logger.info(f"  - Feature cache: {feature_cache_file}")
+    logger.info(f"  - Graph base cache: {graph_base_cache_file}")
+    logger.info(f"  - Graph variant cache: {graph_variant_cache_file}")
 
     return data
 

@@ -5,6 +5,7 @@ Expected improvement: +3-5% accuracy (69% → 72-74%)
 """
 import os
 import sys
+import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
@@ -35,6 +36,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def parse_args():
+    """Parse optional runtime overrides for controlled experiment sweeps."""
+    parser = argparse.ArgumentParser(description="Train Multi-Scale Temporal + Graph model")
+    parser.add_argument('--label-path', type=str, default=None,
+                        help='Override label file path')
+    parser.add_argument('--samples-per-class', type=int, default=None,
+                        help='Optional per-class sampling for small-scale experiments')
+    parser.add_argument('--spatial-model', type=str, choices=['GCN', 'SAGE', 'WGCN', 'GINE', 'GIN', 'GAT', 'EVOLVEGCN'], default=None,
+                        help='Override spatial branch model')
+    parser.add_argument('--temporal-model', type=str, choices=['LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', 'BIGRU'], default=None,
+                        help='Override temporal branch model')
+    parser.add_argument('--num-epochs', type=int, default=None,
+                        help='Override max number of epochs')
+    parser.add_argument('--early-stopping-patience', type=int, default=None,
+                        help='Override early stopping patience')
+    parser.add_argument('--learning-rate', type=float, default=None,
+                        help='Override learning rate')
+    parser.add_argument('--batch-size', type=int, default=None,
+                        help='Override batch size')
+    parser.add_argument('--gradient-accumulation', type=int, default=None,
+                        help='Override gradient accumulation steps')
+    parser.add_argument('--scheduler-patience', type=int, default=None,
+                        help='Override ReduceLROnPlateau patience')
+    parser.add_argument('--scheduler-factor', type=float, default=None,
+                        help='Override ReduceLROnPlateau factor')
+    parser.add_argument('--run-tag', type=str, default=None,
+                        help='Optional suffix for output directory naming')
+    parser.add_argument('--no-cache', action='store_true',
+                        help='Disable cached preprocessing data')
+    parser.add_argument('--graph-topk-out', type=int, default=None,
+                        help='Keep top-k outgoing edges per node in graph construction')
+    parser.add_argument('--graph-topk-in', type=int, default=None,
+                        help='Keep top-k incoming edges per node in graph construction')
+    parser.add_argument('--graph-temporal-mode', type=str, choices=['static', 'daily'], default=None,
+                        help='Graph temporal mode: static or daily discrete snapshots')
+    parser.add_argument('--random-seed', type=int, default=None,
+                        help='Override random seed for data sampling/splitting')
+    parser.add_argument('--spatial-node-feature-mode', type=str,
+                        choices=['ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', 'raw_temporal_mean'],
+                        default=None,
+                        help='Spatial node feature mode for non-GINE branches')
+    parser.add_argument('--branch-ablation-mode', type=str, choices=['full', 'temporal_only', 'spatial_only'], default='full',
+                        help='Ablate temporal/spatial branches while keeping the same training pipeline')
+    parser.add_argument('--fusion-ablation-mode', type=str, choices=['gated', 'mean', 'concat'], default='gated',
+                        help='Ablate fusion mechanism by replacing gated fusion with simple mean pooling or concat')
+    return parser.parse_args()
+
+
 def train_epoch(model, train_loader, criterion, optimizer, device, accumulation_steps=4, grad_clip_norm=1.0):
     """Train one epoch"""
     model.train()
@@ -53,6 +102,12 @@ def train_epoch(model, train_loader, criterion, optimizer, device, accumulation_
         # Get full temporal features
         all_temporal_2021 = batch['all_temporal_2021'].to(device)
         all_temporal_2024 = batch['all_temporal_2024'].to(device)
+        all_raw_temporal_2021 = batch['all_raw_temporal_2021']
+        all_raw_temporal_2024 = batch['all_raw_temporal_2024']
+        if all_raw_temporal_2021 is not None:
+            all_raw_temporal_2021 = all_raw_temporal_2021.to(device)
+        if all_raw_temporal_2024 is not None:
+            all_raw_temporal_2024 = all_raw_temporal_2024.to(device)
 
         # Move graphs to device
         graphs_2021 = [(torch.from_numpy(edge_idx).to(device) if isinstance(edge_idx, np.ndarray) else edge_idx.to(device),
@@ -69,14 +124,17 @@ def train_epoch(model, train_loader, criterion, optimizer, device, accumulation_
             graphs_2021=graphs_2021,
             graphs_2024=graphs_2024,
             num_nodes=num_nodes,
-            node_indices=node_indices
+            node_indices=node_indices,
+            raw_x_2021=all_raw_temporal_2021,
+            raw_x_2024=all_raw_temporal_2024
         )
 
         # Compute loss
         loss = criterion(logits, labels)
+        normalized_loss = loss / accumulation_steps
 
         # Backward pass with gradient accumulation
-        loss.backward()
+        normalized_loss.backward()
 
         if (batch_idx + 1) % accumulation_steps == 0:
             # Gradient clipping
@@ -142,6 +200,12 @@ def evaluate(model, data_loader, criterion, device):
         # Get full temporal features
         all_temporal_2021 = batch['all_temporal_2021'].to(device)
         all_temporal_2024 = batch['all_temporal_2024'].to(device)
+        all_raw_temporal_2021 = batch['all_raw_temporal_2021']
+        all_raw_temporal_2024 = batch['all_raw_temporal_2024']
+        if all_raw_temporal_2021 is not None:
+            all_raw_temporal_2021 = all_raw_temporal_2021.to(device)
+        if all_raw_temporal_2024 is not None:
+            all_raw_temporal_2024 = all_raw_temporal_2024.to(device)
 
         # Move graphs to device
         graphs_2021 = [(torch.from_numpy(edge_idx).to(device) if isinstance(edge_idx, np.ndarray) else edge_idx.to(device),
@@ -158,7 +222,9 @@ def evaluate(model, data_loader, criterion, device):
             graphs_2021=graphs_2021,
             graphs_2024=graphs_2024,
             num_nodes=num_nodes,
-            node_indices=node_indices
+            node_indices=node_indices,
+            raw_x_2021=all_raw_temporal_2021,
+            raw_x_2024=all_raw_temporal_2024
         )
 
         # Compute loss
@@ -196,6 +262,52 @@ def evaluate(model, data_loader, criterion, device):
 
 def main():
     """Main training function with Multi-Scale Temporal Branch"""
+    args = parse_args()
+
+    label_path = args.label_path if args.label_path else config.LABEL_PATH
+    samples_per_class = args.samples_per_class
+    spatial_model = args.spatial_model if args.spatial_model else getattr(config, 'SPATIAL_MODEL', 'GCN')
+    temporal_model = args.temporal_model if args.temporal_model else getattr(config, 'TEMPORAL_MODEL', 'LSTM')
+    temporal_model = temporal_model.upper()
+    if spatial_model == 'GIN':
+        spatial_model = 'GINE'
+    num_epochs = args.num_epochs if args.num_epochs is not None else config.NUM_EPOCHS
+    early_stopping_patience = (
+        args.early_stopping_patience
+        if args.early_stopping_patience is not None
+        else config.EARLY_STOPPING_PATIENCE
+    )
+    learning_rate = args.learning_rate if args.learning_rate is not None else config.LEARNING_RATE
+    batch_size = args.batch_size if args.batch_size is not None else config.BATCH_SIZE
+    gradient_accumulation = (
+        args.gradient_accumulation
+        if args.gradient_accumulation is not None
+        else config.GRADIENT_ACCUMULATION
+    )
+    scheduler_patience = (
+        args.scheduler_patience
+        if args.scheduler_patience is not None
+        else config.SCHEDULER_PATIENCE
+    )
+    scheduler_factor = (
+        args.scheduler_factor
+        if args.scheduler_factor is not None
+        else config.SCHEDULER_FACTOR
+    )
+    use_cache = not args.no_cache
+
+    # Runtime graph sparsification overrides (direction 2).
+    if args.graph_topk_out is not None:
+        config.GRAPH_TOPK_OUT = args.graph_topk_out
+    if args.graph_topk_in is not None:
+        config.GRAPH_TOPK_IN = args.graph_topk_in
+    if args.random_seed is not None:
+        config.RANDOM_SEED = args.random_seed
+    if args.spatial_node_feature_mode is not None:
+        config.SPATIAL_NODE_FEATURE_MODE = args.spatial_node_feature_mode
+    if args.graph_temporal_mode is not None:
+        config.GRAPH_TEMPORAL_MODE = args.graph_temporal_mode
+
     # Record start time
     start_time = time.time()
     start_datetime = datetime.now()
@@ -205,14 +317,28 @@ def main():
     logger.info("=" * 80)
     logger.info(f"Training started at: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("\nImprovement: Multi-Scale Temporal Branch (hourly + daily + weekly)")
-    logger.info(f"Dataset: {config.LABEL_PATH} with flow threshold {config.FLOW_THRESHOLD} and {config.TIME_STEPS} time steps")
+    logger.info(f"Dataset: {label_path} with flow threshold {config.FLOW_THRESHOLD} and {config.TIME_STEPS} time steps")
+    logger.info(
+        f"Runtime overrides | spatial_model={spatial_model}, samples_per_class={samples_per_class}, "
+        f"epochs={num_epochs}, batch_size={batch_size}, lr={learning_rate}, "
+        f"grad_accum={gradient_accumulation}, early_stop={early_stopping_patience}, use_cache={use_cache}"
+    )
+    logger.info(f"Temporal override | temporal_model={temporal_model}")
+    logger.info(
+        f"Graph overrides | topk_out={config.GRAPH_TOPK_OUT}, topk_in={config.GRAPH_TOPK_IN}"
+    )
+    logger.info(f"Graph temporal mode | mode={getattr(config, 'GRAPH_TEMPORAL_MODE', 'static')}")
+    logger.info(f"Seed override | random_seed={config.RANDOM_SEED}")
+    logger.info(f"Spatial node feature mode | mode={config.SPATIAL_NODE_FEATURE_MODE}")
+    logger.info(f"Branch ablation mode | mode={args.branch_ablation_mode}")
+    logger.info(f"Fusion ablation mode | mode={args.fusion_ablation_mode}")
 
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    #LABEL_PATH=data/labels_sgh_entropy_0.03_4500.csv
-    label_part = config.LABEL_PATH.split('/')[-1].split('.')[0].split('_')[-2:]
-    label_str = '_'.join(label_part)  # 把最后两个元素拼接成一个字符串
-    output_dir = f"outputs/multiscale_temporal_{timestamp}_{label_str}"
+    label_stem = os.path.splitext(os.path.basename(label_path))[0]
+    output_dir = f"outputs/multiscale_temporal_{timestamp}_{label_stem}"
+    if args.run_tag:
+        output_dir = f"{output_dir}_{args.run_tag}"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(f"{output_dir}/models", exist_ok=True)
     os.makedirs(f"{output_dir}/metrics", exist_ok=True)
@@ -231,9 +357,9 @@ def main():
     logger.info("=" * 80)
 
     data = prepare_dual_year_experiment_data(
-        label_path=config.LABEL_PATH,
-        samples_per_class=None,
-        use_cache=True
+        label_path=label_path,
+        samples_per_class=samples_per_class,
+        use_cache=use_cache
     )
 
     logger.info(f"✓ Data loaded successfully")
@@ -297,12 +423,17 @@ def main():
     # 2. 使用 feat_dim 初始化
     all_temporal_2021 = torch.zeros(num_nodes, 168, feat_dim)
     all_temporal_2024 = torch.zeros(num_nodes, 168, feat_dim)
+    all_raw_temporal_2021 = torch.zeros(num_nodes, 168, feat_dim)
+    all_raw_temporal_2024 = torch.zeros(num_nodes, 168, feat_dim)
 
     for grid_id, idx in data['grid_id_to_idx'].items():
         if grid_id in temporal_features_2021:
             # 现在维度匹配了，都是 (168, 2)
             all_temporal_2021[idx] = torch.tensor(temporal_features_2021[grid_id], dtype=torch.float32)
             all_temporal_2024[idx] = torch.tensor(temporal_features_2024[grid_id], dtype=torch.float32)
+        if grid_id in data['flows_2021']:
+            all_raw_temporal_2021[idx] = torch.tensor(data['flows_2021'][grid_id], dtype=torch.float32)
+            all_raw_temporal_2024[idx] = torch.tensor(data['flows_2024'][grid_id], dtype=torch.float32)
 
     # Create collator
     collator = PureGraphBatchCollator(
@@ -310,13 +441,15 @@ def main():
         graphs_2024=data['graphs_2024'],
         grid_id_to_idx=data['grid_id_to_idx'],
         all_temporal_2021=all_temporal_2021,
-        all_temporal_2024=all_temporal_2024
+        all_temporal_2024=all_temporal_2024,
+        all_raw_temporal_2021=all_raw_temporal_2021,
+        all_raw_temporal_2024=all_raw_temporal_2024
     )
 
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=True,
         collate_fn=collator,
         num_workers=0
@@ -324,7 +457,7 @@ def main():
 
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config.BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=False,
         collate_fn=collator,
         num_workers=0
@@ -332,7 +465,7 @@ def main():
 
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config.BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=False,
         collate_fn=collator,
         num_workers=0
@@ -348,9 +481,8 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
 
-    # Choose spatial model based on config
-    spatial_model = getattr(config, 'SPATIAL_MODEL', 'GCN')
     logger.info(f"Spatial model: {spatial_model}")
+    logger.info(f"Temporal model: {temporal_model}")
 
     model = EnhancedDualBranchModel(
         temporal_input_size=config.TEMPORAL_INPUT_SIZE,
@@ -358,7 +490,10 @@ def main():
         num_classes=config.NUM_CLASSES,
         num_time_steps=config.TIME_STEPS,
         dropout=config.LSTM_DROPOUT,
-        spatial_model=spatial_model
+        spatial_model=spatial_model,
+        temporal_model=temporal_model,
+        branch_ablation_mode=args.branch_ablation_mode,
+        fusion_ablation_mode=args.fusion_ablation_mode
     )
 
     model = model.to(device)
@@ -376,10 +511,12 @@ def main():
     logger.info(f"  - Total parameters: {total_params:,}")
     logger.info(f"  - Trainable parameters: {trainable_params:,}")
     logger.info(f"  - Multi-scale temporal: Hourly + Daily + Weekly")
+    logger.info(f"  - Temporal branch model: {temporal_model}")
     logger.info(f"  - Spatial branch: {spatial_model}")
     if spatial_model == "GINE":
         logger.info(f"  - Laplacian PE dimension: {config.LAPLACIAN_PE_DIM}")
-    logger.info(f"  - Gated feature fusion: Yes")
+    logger.info(f"  - Branch ablation mode: {args.branch_ablation_mode}")
+    logger.info(f"  - Fusion ablation mode: {args.fusion_ablation_mode}")
 
     # Create loss function
     logger.info("\n" + "=" * 80)
@@ -390,12 +527,21 @@ def main():
     criterion = nn.CrossEntropyLoss(weight=class_weights)
 
     # Optimizer and scheduler
-    optimizer = Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=5, factor=0.5, verbose=True)
+    optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=config.WEIGHT_DECAY)
+    scheduler = ReduceLROnPlateau(
+        optimizer,
+        mode='max',
+        patience=scheduler_patience,
+        factor=scheduler_factor,
+        verbose=True
+    )
 
     logger.info(f"✓ Training setup complete")
-    logger.info(f"  - Optimizer: Adam (lr={config.LEARNING_RATE}, wd={config.WEIGHT_DECAY})")
-    logger.info(f"  - Scheduler: ReduceLROnPlateau (patience=5)")
+    logger.info(f"  - Optimizer: Adam (lr={learning_rate}, wd={config.WEIGHT_DECAY})")
+    logger.info(
+        f"  - Scheduler: ReduceLROnPlateau (patience={scheduler_patience}, "
+        f"factor={scheduler_factor})"
+    )
     logger.info(f"  - Loss: Weighted cross-entropy")
 
     # Training loop
@@ -406,13 +552,13 @@ def main():
     best_accuracy = 0
     patience_counter = 0
 
-    for epoch in range(config.NUM_EPOCHS):
-        logger.info(f"\nEpoch {epoch + 1}/{config.NUM_EPOCHS}")
+    for epoch in range(num_epochs):
+        logger.info(f"\nEpoch {epoch + 1}/{num_epochs}")
 
         # Train
         train_metrics = train_epoch(
             model, train_loader,
-            criterion, optimizer, device, accumulation_steps=4
+            criterion, optimizer, device, accumulation_steps=gradient_accumulation
         )
 
         # Validate
@@ -452,10 +598,10 @@ def main():
         else:
             patience_counter += 1
 
-        logger.info(f"  Patience: {patience_counter}/{config.EARLY_STOPPING_PATIENCE}")
+        logger.info(f"  Patience: {patience_counter}/{early_stopping_patience}")
 
         # Early stopping
-        if patience_counter >= config.EARLY_STOPPING_PATIENCE:
+        if patience_counter >= early_stopping_patience:
             logger.info(f"\n✓ Early stopping at epoch {epoch + 1}")
             break
 
@@ -494,41 +640,53 @@ def main():
         },
         'model_architecture': {
             'temporal_branch': {
-                'type': 'Multi-scale (hourly + daily + weekly)',
+                'type': f'Multi-scale (hourly + daily + weekly) + {temporal_model}',
+                'temporal_model': temporal_model,
                 'lstm_layers': config.LSTM_LAYERS,
                 'lstm_hidden_size': config.LSTM_HIDDEN_SIZE,
                 'lstm_dropout': config.LSTM_DROPOUT,
                 'temporal_input_size': config.TEMPORAL_INPUT_SIZE
             },
             'spatial_branch': {
-                'type': 'Pure Graph GAT',
-                'gat_layers': config.SPATIAL_LAYERS,
-                'gat_hidden_size': config.SPATIAL_HIDDEN_SIZE,
-                'gat_heads': config.SPATIAL_HEADS
+                'type': f'Pure Graph {spatial_model}',
+                'spatial_layers': config.SPATIAL_LAYERS,
+                'spatial_hidden_size': config.SPATIAL_HIDDEN_SIZE,
+                'node_feature_mode': config.SPATIAL_NODE_FEATURE_MODE,
+                'graph_temporal_mode': getattr(config, 'GRAPH_TEMPORAL_MODE', 'static'),
+                'laplacian_pe_dim': config.LAPLACIAN_PE_DIM if spatial_model == 'GINE' else None
             },
             'fusion': {
-                'type': 'Gated Fusion',
+                'type': {
+                    'gated': 'Gated Fusion',
+                    'mean': 'Mean Pooling',
+                    'concat': 'Concat + MLP'
+                }[args.fusion_ablation_mode],
                 'fusion_hidden_size': config.FUSION_HIDDEN_SIZE,
-                'attention_heads': config.ATTENTION_HEADS
+                'attention_heads': config.ATTENTION_HEADS,
+                'branch_ablation_mode': args.branch_ablation_mode,
+                'fusion_ablation_mode': args.fusion_ablation_mode
             },
             'output': {
                 'num_classes': config.NUM_CLASSES
             }
         },
         'training_config': {
-            'batch_size': config.BATCH_SIZE,
-            'learning_rate': config.LEARNING_RATE,
+            'batch_size': batch_size,
+            'gradient_accumulation': gradient_accumulation,
+            'learning_rate': learning_rate,
             'weight_decay': config.WEIGHT_DECAY,
-            'num_epochs': config.NUM_EPOCHS,
-            'early_stopping_patience': config.EARLY_STOPPING_PATIENCE,
+            'num_epochs': num_epochs,
+            'early_stopping_patience': early_stopping_patience,
+            'scheduler_patience': scheduler_patience,
+            'scheduler_factor': scheduler_factor,
             'train_split': config.TRAIN_SPLIT,
             'val_split': config.VAL_SPLIT,
             'test_split': config.TEST_SPLIT,
             'random_seed': config.RANDOM_SEED,
-            'dropout': 0.2
+            'dropout': config.LSTM_DROPOUT
         },
         'data_info': {
-            'label_file': data.get('label_file_name', 'N/A'),
+            'label_file': label_path,
             'label_file_hash': data.get('label_file_hash', 'N/A'),
             'total_samples': len(data['labels']),
             'train_samples': len(train_dataset),
@@ -587,34 +745,48 @@ def main():
         f.write("Model Architecture:\n")
         f.write("-" * 80 + "\n")
         f.write(f"  Temporal Branch:\n")
-        f.write(f"    - Type: Multi-scale (hourly + daily + weekly)\n")
+        f.write(f"    - Type: Multi-scale (hourly + daily + weekly) + {temporal_model}\n")
+        f.write(f"    - Temporal Model: {temporal_model}\n")
         f.write(f"    - LSTM Layers: {config.LSTM_LAYERS}\n")
         f.write(f"    - LSTM Hidden Size: {config.LSTM_HIDDEN_SIZE}\n")
         f.write(f"    - LSTM Dropout: {config.LSTM_DROPOUT}\n")
         f.write(f"    - Temporal Input Size: {config.TEMPORAL_INPUT_SIZE}\n")
         f.write(f"  Spatial Branch:\n")
-        f.write(f"    - Type: Pure Graph GCN\n")
+        f.write(f"    - Type: Pure Graph {spatial_model}\n")
         f.write(f"    - SPATIAL Layers: {config.SPATIAL_LAYERS}\n")
         f.write(f"    - SPATIAL Hidden Size: {config.SPATIAL_HIDDEN_SIZE}\n")
-        f.write(f"    - SPATIAL Heads: {config.SPATIAL_HEADS}\n")
+        f.write(f"    - Node Feature Mode: {config.SPATIAL_NODE_FEATURE_MODE}\n")
+        f.write(f"    - Graph Temporal Mode: {getattr(config, 'GRAPH_TEMPORAL_MODE', 'static')}\n")
+        if spatial_model == "GINE":
+            f.write(f"    - Laplacian PE Dimension: {config.LAPLACIAN_PE_DIM}\n")
+        fusion_type_name = {
+            'gated': 'Gated Fusion',
+            'mean': 'Mean Pooling',
+            'concat': 'Concat + MLP'
+        }[args.fusion_ablation_mode]
         f.write(f"  Fusion:\n")
-        f.write(f"    - Type: Gated Fusion\n")
+        f.write(f"    - Type: {fusion_type_name}\n")
         f.write(f"    - Fusion Hidden Size: {config.FUSION_HIDDEN_SIZE}\n")
         f.write(f"    - Attention Heads: {config.ATTENTION_HEADS}\n")
+        f.write(f"    - Branch Ablation Mode: {args.branch_ablation_mode}\n")
+        f.write(f"    - Fusion Ablation Mode: {args.fusion_ablation_mode}\n")
         f.write(f"  Output:\n")
         f.write(f"    - Num Classes: {config.NUM_CLASSES}\n")
         f.write("\n")
 
         f.write("Training Configuration:\n")
         f.write("-" * 80 + "\n")
-        f.write(f"  Batch Size: {config.BATCH_SIZE}\n")
-        f.write(f"  Learning Rate: {config.LEARNING_RATE}\n")
+        f.write(f"  Batch Size: {batch_size}\n")
+        f.write(f"  Gradient Accumulation: {gradient_accumulation}\n")
+        f.write(f"  Learning Rate: {learning_rate}\n")
         f.write(f"  Weight Decay: {config.WEIGHT_DECAY}\n")
-        f.write(f"  Num Epochs: {config.NUM_EPOCHS}\n")
-        f.write(f"  Early Stopping Patience: {config.EARLY_STOPPING_PATIENCE}\n")
+        f.write(f"  Num Epochs: {num_epochs}\n")
+        f.write(f"  Early Stopping Patience: {early_stopping_patience}\n")
+        f.write(f"  Scheduler Patience: {scheduler_patience}\n")
+        f.write(f"  Scheduler Factor: {scheduler_factor}\n")
         f.write(f"  Train/Val/Test Split: {config.TRAIN_SPLIT}/{config.VAL_SPLIT}/{config.TEST_SPLIT}\n")
         f.write(f"  Random Seed: {config.RANDOM_SEED}\n")
-        f.write(f"  Dropout: 0.2\n")
+        f.write(f"  Dropout: {config.LSTM_DROPOUT}\n")
         f.write("\n")
         f.write("=" * 80 + "\n\n")
         f.write(report)

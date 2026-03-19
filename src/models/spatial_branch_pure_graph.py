@@ -13,8 +13,8 @@ Models:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, SAGEConv
-from typing import Tuple
+from torch_geometric.nn import GCNConv, SAGEConv, GraphConv, GATConv
+from typing import List, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ class PureGraphDualYearGCN(nn.Module):
     """
 
     def __init__(self,
+                 input_size: int = 1,
                  hidden_size: int = 128,
                  num_layers: int = 3,
                  dropout: float = 0.2,
@@ -58,6 +59,7 @@ class PureGraphDualYearGCN(nn.Module):
         """
         super(PureGraphDualYearGCN, self).__init__()
 
+        self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.dropout_rate = dropout
@@ -74,8 +76,8 @@ class PureGraphDualYearGCN(nn.Module):
 
         for i in range(num_layers):
             if i == 0:
-                # First layer: all-1 features (1) -> hidden_size
-                in_channels = 1
+                # First layer: input_size -> hidden_size
+                in_channels = input_size
             else:
                 # Subsequent layers: hidden_size -> hidden_size
                 in_channels = hidden_size
@@ -95,7 +97,7 @@ class PureGraphDualYearGCN(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.act = F.relu
 
-    def process_year(self, edge_index, edge_attr, num_nodes):
+    def process_year(self, edge_index, edge_attr, num_nodes, node_features: Optional[torch.Tensor] = None):
         """
         Process one year's graph
 
@@ -107,9 +109,12 @@ class PureGraphDualYearGCN(nn.Module):
         Returns:
             h: Node embeddings (num_nodes, output_size)
         """
-        # Featureless learning: generate all-1 features
-        # This lets the graph structure (via edge weights) drive the learning
-        x = torch.ones((num_nodes, 1), device=edge_index.device, dtype=torch.float32)
+        # Default: featureless learning with all-1 inputs.
+        # Optional: learned/derived node features from temporal branch.
+        if node_features is None:
+            x = torch.ones((num_nodes, self.input_size), device=edge_index.device, dtype=torch.float32)
+        else:
+            x = node_features.float()
 
         # Ensure edge weights are float32 (memory efficiency)
         edge_weights = edge_attr.float()
@@ -147,7 +152,9 @@ class PureGraphDualYearGCN(nn.Module):
         self._cached_2024 = None
         self._cache_valid = False
 
-    def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None):
+    def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None,
+                node_features_2021: Optional[torch.Tensor] = None,
+                node_features_2024: Optional[torch.Tensor] = None):
         """
         Forward pass for both years with caching support
 
@@ -175,9 +182,9 @@ class PureGraphDualYearGCN(nn.Module):
         # During evaluation mode, use cache if available
         if self.training or not self._cache_valid:
             # Process 2021 with static flow graph
-            h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes)
+            h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes, node_features_2021)
             # Process 2024 with static flow graph
-            h_2024 = self.process_year(edge_index_2024, edge_attr_2024, num_nodes)
+            h_2024 = self.process_year(edge_index_2024, edge_attr_2024, num_nodes, node_features_2024)
 
             # Cache the results (detach to save memory during eval)
             if not self.training:
@@ -220,6 +227,7 @@ class PureGraphDualYearSAGE(nn.Module):
     """
 
     def __init__(self,
+                 input_size: int = 1,
                  hidden_size: int = 128,
                  num_layers: int = 3,
                  dropout: float = 0.2,
@@ -235,6 +243,7 @@ class PureGraphDualYearSAGE(nn.Module):
         """
         super(PureGraphDualYearSAGE, self).__init__()
 
+        self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.dropout_rate = dropout
@@ -251,8 +260,8 @@ class PureGraphDualYearSAGE(nn.Module):
 
         for i in range(num_layers):
             if i == 0:
-                # First layer: all-1 features (1) -> hidden_size
-                in_channels = 1
+                # First layer: input_size -> hidden_size
+                in_channels = input_size
             else:
                 # Subsequent layers: hidden_size -> hidden_size
                 in_channels = hidden_size
@@ -271,7 +280,7 @@ class PureGraphDualYearSAGE(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.act = F.relu
 
-    def process_year(self, edge_index, edge_attr, num_nodes):
+    def process_year(self, edge_index, edge_attr, num_nodes, node_features: Optional[torch.Tensor] = None):
         """
         Process one year's graph
 
@@ -285,8 +294,12 @@ class PureGraphDualYearSAGE(nn.Module):
         Returns:
             h: Node embeddings (num_nodes, output_size)
         """
-        # Featureless learning: generate all-1 features
-        x = torch.ones((num_nodes, 1), device=edge_index.device, dtype=torch.float32)
+        # Default: featureless learning with all-1 inputs.
+        # Optional: learned/derived node features from temporal branch.
+        if node_features is None:
+            x = torch.ones((num_nodes, self.input_size), device=edge_index.device, dtype=torch.float32)
+        else:
+            x = node_features.float()
 
         # CRITICAL: Log-transform edge weights to prevent NaN!
         # GraphSAGE doesn't have GCN's symmetric normalization, so large flows (12101)
@@ -327,7 +340,9 @@ class PureGraphDualYearSAGE(nn.Module):
         self._cached_2024 = None
         self._cache_valid = False
 
-    def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None):
+    def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None,
+                node_features_2021: Optional[torch.Tensor] = None,
+                node_features_2024: Optional[torch.Tensor] = None):
         """
         Forward pass for both years with caching support
 
@@ -355,9 +370,9 @@ class PureGraphDualYearSAGE(nn.Module):
         # During evaluation mode, use cache if available
         if self.training or not self._cache_valid:
             # Process 2021 with static flow graph
-            h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes)
+            h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes, node_features_2021)
             # Process 2024 with static flow graph
-            h_2024 = self.process_year(edge_index_2024, edge_attr_2024, num_nodes)
+            h_2024 = self.process_year(edge_index_2024, edge_attr_2024, num_nodes, node_features_2024)
 
             # Cache the results (detach to save memory during eval)
             if not self.training:
@@ -373,6 +388,324 @@ class PureGraphDualYearSAGE(nn.Module):
         diff = h_2024 - h_2021
 
         # Extract batch nodes if indices provided
+        if node_indices is not None:
+            h_2021 = h_2021[node_indices]
+            h_2024 = h_2024[node_indices]
+            diff = diff[node_indices]
+
+        return h_2021, h_2024, diff
+
+
+class PureGraphDualYearEvolveGCN(nn.Module):
+    """
+    EvolveGCN-inspired discrete-time spatial branch for large graph snapshots.
+
+    Implementation notes:
+    - Spatial encoding per snapshot uses shared GCN layers.
+    - Snapshot embeddings are fed to a lightweight GRU over time.
+    - This keeps complexity manageable while introducing temporal graph dynamics.
+    """
+
+    def __init__(self,
+                 input_size: int = 1,
+                 hidden_size: int = 128,
+                 num_layers: int = 3,
+                 dropout: float = 0.2,
+                 output_size: int = 256):
+        super(PureGraphDualYearEvolveGCN, self).__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout_rate = dropout
+        self.output_size = output_size
+
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
+        self.gcn_layers = nn.ModuleList()
+        for i in range(num_layers):
+            in_channels = input_size if i == 0 else hidden_size
+            self.gcn_layers.append(
+                GCNConv(
+                    in_channels=in_channels,
+                    out_channels=hidden_size,
+                    normalize=True,
+                    add_self_loops=False
+                )
+            )
+
+        self.output_proj = nn.Linear(hidden_size, output_size)
+        self.temporal_gru = nn.GRU(
+            input_size=output_size,
+            hidden_size=output_size,
+            num_layers=1,
+            batch_first=True
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.act = F.relu
+
+    def process_snapshot(self, edge_index, edge_attr, num_nodes, node_features: Optional[torch.Tensor] = None):
+        if node_features is None:
+            x = torch.ones((num_nodes, self.input_size), device=edge_index.device, dtype=torch.float32)
+        else:
+            x = node_features.float()
+
+        edge_weights = edge_attr.float()
+        if edge_index.dtype != torch.long:
+            edge_index = edge_index.long()
+
+        h = x
+        for gcn_layer in self.gcn_layers:
+            h = gcn_layer(h, edge_index, edge_weight=edge_weights)
+            h = self.act(h)
+            h = self.dropout(h)
+
+        return self.output_proj(h)
+
+    def process_year_sequence(self, graphs: List[Tuple[torch.Tensor, torch.Tensor]], num_nodes, node_features=None):
+        snapshot_embeddings = []
+
+        for edge_index, edge_attr in graphs:
+            snapshot_embeddings.append(self.process_snapshot(edge_index, edge_attr, num_nodes, node_features))
+
+        if len(snapshot_embeddings) == 1:
+            return snapshot_embeddings[0]
+
+        # (T, N, D) -> (N, T, D)
+        h_seq = torch.stack(snapshot_embeddings, dim=0).permute(1, 0, 2)
+        h_out, _ = self.temporal_gru(h_seq)
+        return h_out[:, -1, :]
+
+    def clear_cache(self):
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
+    def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None,
+                node_features_2021: Optional[torch.Tensor] = None,
+                node_features_2024: Optional[torch.Tensor] = None):
+        if self.training or not self._cache_valid:
+            h_2021 = self.process_year_sequence(graphs_2021, num_nodes, node_features_2021)
+            h_2024 = self.process_year_sequence(graphs_2024, num_nodes, node_features_2024)
+
+            if not self.training:
+                self._cached_2021 = h_2021.detach()
+                self._cached_2024 = h_2024.detach()
+                self._cache_valid = True
+        else:
+            h_2021 = self._cached_2021
+            h_2024 = self._cached_2024
+
+        diff = h_2024 - h_2021
+
+        if node_indices is not None:
+            h_2021 = h_2021[node_indices]
+            h_2024 = h_2024[node_indices]
+            diff = diff[node_indices]
+
+        return h_2021, h_2024, diff
+
+
+class PureGraphDualYearWGCN(nn.Module):
+    """
+    Weighted GraphConv spatial branch.
+
+    Compared with SAGE, this branch explicitly uses edge weights during
+    message passing, which is critical for OD-flow intensity modeling.
+    """
+
+    def __init__(self,
+                 input_size: int = 1,
+                 hidden_size: int = 128,
+                 num_layers: int = 3,
+                 dropout: float = 0.2,
+                 output_size: int = 256):
+        super(PureGraphDualYearWGCN, self).__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout_rate = dropout
+        self.output_size = output_size
+
+        # Cache for storing computed graph embeddings
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
+        # Weighted GraphConv layers
+        self.graph_layers = nn.ModuleList()
+        for i in range(num_layers):
+            in_channels = input_size if i == 0 else hidden_size
+            self.graph_layers.append(
+                GraphConv(
+                    in_channels=in_channels,
+                    out_channels=hidden_size,
+                    aggr='add'
+                )
+            )
+
+        self.output_proj = nn.Linear(hidden_size, output_size)
+        self.dropout = nn.Dropout(dropout)
+        self.act = F.relu
+
+    def process_year(self, edge_index, edge_attr, num_nodes, node_features: Optional[torch.Tensor] = None):
+        """Process one year's graph with explicit edge-weighted propagation."""
+        if node_features is None:
+            x = torch.ones((num_nodes, self.input_size), device=edge_index.device, dtype=torch.float32)
+        else:
+            x = node_features.float()
+
+        if edge_index.dtype != torch.long:
+            edge_index = edge_index.long()
+
+        # Log-transform flow to stabilize large OD weights.
+        edge_weights = torch.log1p(edge_attr.float())
+
+        h = x
+        for graph_layer in self.graph_layers:
+            h = graph_layer(h, edge_index, edge_weight=edge_weights)
+            h = self.act(h)
+            h = self.dropout(h)
+
+        h_out = self.output_proj(h)
+        return h_out
+
+    def clear_cache(self):
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
+    def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None,
+                node_features_2021: Optional[torch.Tensor] = None,
+                node_features_2024: Optional[torch.Tensor] = None):
+        edge_index_2021, edge_attr_2021 = graphs_2021[0]
+        edge_index_2024, edge_attr_2024 = graphs_2024[0]
+
+        edge_attr_2021 = edge_attr_2021.float()
+        edge_attr_2024 = edge_attr_2024.float()
+
+        if self.training or not self._cache_valid:
+            h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes, node_features_2021)
+            h_2024 = self.process_year(edge_index_2024, edge_attr_2024, num_nodes, node_features_2024)
+
+            if not self.training:
+                self._cached_2021 = h_2021.detach()
+                self._cached_2024 = h_2024.detach()
+                self._cache_valid = True
+        else:
+            h_2021 = self._cached_2021
+            h_2024 = self._cached_2024
+
+        diff = h_2024 - h_2021
+
+        if node_indices is not None:
+            h_2021 = h_2021[node_indices]
+            h_2024 = h_2024[node_indices]
+            diff = diff[node_indices]
+
+        return h_2021, h_2024, diff
+
+
+class PureGraphDualYearGAT(nn.Module):
+    """
+    Pure graph-based spatial branch using GAT with edge attributes.
+
+    This branch keeps the same dual-year and cache behavior as GCN/SAGE/WGCN,
+    while introducing attention-based message passing on top-k sparse graphs.
+    """
+
+    def __init__(self,
+                 input_size: int = 1,
+                 hidden_size: int = 128,
+                 num_layers: int = 2,
+                 dropout: float = 0.2,
+                 output_size: int = 256,
+                 heads: int = 1):
+        super(PureGraphDualYearGAT, self).__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout_rate = dropout
+        self.output_size = output_size
+        self.heads = heads
+
+        # Cache for storing computed graph embeddings
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
+        self.gat_layers = nn.ModuleList()
+        for i in range(num_layers):
+            in_channels = input_size if i == 0 else hidden_size
+            self.gat_layers.append(
+                GATConv(
+                    in_channels=in_channels,
+                    out_channels=hidden_size,
+                    heads=heads,
+                    concat=False,
+                    dropout=dropout,
+                    edge_dim=1,
+                    add_self_loops=False
+                )
+            )
+
+        self.output_proj = nn.Linear(hidden_size, output_size)
+        self.dropout = nn.Dropout(dropout)
+        self.act = F.elu
+
+    def process_year(self, edge_index, edge_attr, num_nodes, node_features: Optional[torch.Tensor] = None):
+        if node_features is None:
+            x = torch.ones((num_nodes, self.input_size), device=edge_index.device, dtype=torch.float32)
+        else:
+            x = node_features.float()
+
+        if edge_index.dtype != torch.long:
+            edge_index = edge_index.long()
+
+        # GAT consumes edge_attr as 2D edge features.
+        edge_features = torch.log1p(edge_attr.float()).unsqueeze(-1)
+
+        h = x
+        for gat_layer in self.gat_layers:
+            h = gat_layer(h, edge_index, edge_attr=edge_features)
+            h = self.act(h)
+            h = self.dropout(h)
+
+        h_out = self.output_proj(h)
+        return h_out
+
+    def clear_cache(self):
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
+    def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None,
+                node_features_2021: Optional[torch.Tensor] = None,
+                node_features_2024: Optional[torch.Tensor] = None):
+        edge_index_2021, edge_attr_2021 = graphs_2021[0]
+        edge_index_2024, edge_attr_2024 = graphs_2024[0]
+
+        edge_attr_2021 = edge_attr_2021.float()
+        edge_attr_2024 = edge_attr_2024.float()
+
+        if self.training or not self._cache_valid:
+            h_2021 = self.process_year(edge_index_2021, edge_attr_2021, num_nodes, node_features_2021)
+            h_2024 = self.process_year(edge_index_2024, edge_attr_2024, num_nodes, node_features_2024)
+
+            if not self.training:
+                self._cached_2021 = h_2021.detach()
+                self._cached_2024 = h_2024.detach()
+                self._cache_valid = True
+        else:
+            h_2021 = self._cached_2021
+            h_2024 = self._cached_2024
+
+        diff = h_2024 - h_2021
+
         if node_indices is not None:
             h_2021 = h_2021[node_indices]
             h_2024 = h_2024[node_indices]

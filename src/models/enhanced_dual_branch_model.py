@@ -9,9 +9,22 @@ This model integrates the improvements from Phase 2 of the optimization plan.
 import torch
 import torch.nn as nn
 import config
-from src.models.spatial_branch_pure_graph import PureGraphDualYearGCN, PureGraphDualYearSAGE
+from src.models.spatial_branch_pure_graph import (
+    PureGraphDualYearGCN,
+    PureGraphDualYearSAGE,
+    PureGraphDualYearWGCN,
+    PureGraphDualYearGAT,
+    PureGraphDualYearEvolveGCN,
+)
 from src.models.spatial_branch_gine import PureGraphDualYearGINE, compute_laplacian_pe
-from src.models.multi_scale_temporal import SimplifiedMultiScaleTemporal
+from src.models.multi_scale_temporal import (
+    SimplifiedMultiScaleTemporal,
+    SimplifiedMultiScaleTemporalGRU,
+    SimplifiedMultiScaleTemporalTCN,
+    SimplifiedMultiScaleTemporalTransformer,
+    SimplifiedMultiScaleTemporalBiGRU,
+    FullMultiScaleTemporalTransformer,
+)
 from src.models.gated_fusion import GatedFeatureFusion
 
 
@@ -38,7 +51,10 @@ class EnhancedDualBranchModel(nn.Module):
                  num_classes: int = config.NUM_CLASSES,
                  num_time_steps: int = 168,
                  dropout: float = 0.4,
-                 spatial_model: str = "GCN"):
+                 spatial_model: str = "GCN",
+                 temporal_model: str = "LSTM",
+                 branch_ablation_mode: str = "full",
+                 fusion_ablation_mode: str = "gated"):
         """
         Initialize enhanced dual-branch model
 
@@ -48,7 +64,10 @@ class EnhancedDualBranchModel(nn.Module):
             num_classes: Number of output classes (9)
             num_time_steps: Number of time steps (168 hours)
             dropout: Dropout rate (default: 0.4, increased from 0.2)
-            spatial_model: Spatial branch model type ("GCN", "SAGE", or "GINE")
+            spatial_model: Spatial branch model type ("GCN", "SAGE", "WGCN", "GAT", "EVOLVEGCN", or "GINE")
+            temporal_model: Temporal branch model type ("LSTM", "GRU", "TCN", "TRANSFORMER", "TRANSFORMER_FULL", or "BIGRU")
+            branch_ablation_mode: Branch ablation setting ("full", "temporal_only", or "spatial_only")
+            fusion_ablation_mode: Fusion ablation setting ("gated", "mean", or "concat")
         """
         super(EnhancedDualBranchModel, self).__init__()
 
@@ -57,16 +76,99 @@ class EnhancedDualBranchModel(nn.Module):
         self.num_classes = num_classes
         self.num_time_steps = num_time_steps
         self.spatial_model = spatial_model
+        self.temporal_model = temporal_model.upper()
+        self.branch_ablation_mode = branch_ablation_mode
+        self.fusion_ablation_mode = fusion_ablation_mode
+        self.spatial_node_feature_mode = getattr(config, 'SPATIAL_NODE_FEATURE_MODE', 'ones')
+
+        if self.branch_ablation_mode not in {'full', 'temporal_only', 'spatial_only'}:
+            raise ValueError(
+                f"Unsupported branch_ablation_mode={self.branch_ablation_mode}. "
+                "Use 'full', 'temporal_only', or 'spatial_only'."
+            )
+
+        if self.fusion_ablation_mode not in {'gated', 'mean', 'concat'}:
+            raise ValueError(
+                f"Unsupported fusion_ablation_mode={self.fusion_ablation_mode}. "
+                "Use 'gated', 'mean', or 'concat'."
+            )
+
+        if self.spatial_node_feature_mode not in {
+            'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', 'raw_temporal_mean'
+        }:
+            raise ValueError(
+                f"Unsupported SPATIAL_NODE_FEATURE_MODE={self.spatial_node_feature_mode}. "
+                "Use 'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', or 'raw_temporal_mean'."
+            )
+
+        if self.temporal_model not in {'LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', 'BIGRU'}:
+            raise ValueError(
+                f"Unsupported temporal_model={self.temporal_model}. "
+                "Use 'LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', or 'BIGRU'."
+            )
+
+        if self.spatial_node_feature_mode in {'temporal_mean', 'annual_daily_mean_2d', 'raw_temporal_mean'}:
+            spatial_input_size = temporal_input_size
+        else:
+            # ones / annual_daily_mean both feed 1-dim node feature to spatial branch.
+            spatial_input_size = 1
 
         # Temporal branch: Multi-scale processing
-        self.temporal_branch = SimplifiedMultiScaleTemporal(
-            input_size=temporal_input_size,
-            hidden_size=hidden_size,
-            lstm_hidden=128,
-            dropout=dropout
-        )
+        if self.temporal_model == 'GRU':
+            self.temporal_branch = SimplifiedMultiScaleTemporalGRU(
+                input_size=temporal_input_size,
+                hidden_size=hidden_size,
+                gru_hidden=config.LSTM_HIDDEN_SIZE,
+                gru_layers=config.LSTM_LAYERS,
+                dropout=dropout
+            )
+        elif self.temporal_model == 'TCN':
+            self.temporal_branch = SimplifiedMultiScaleTemporalTCN(
+                input_size=temporal_input_size,
+                hidden_size=hidden_size,
+                tcn_hidden=config.LSTM_HIDDEN_SIZE,
+                tcn_layers=config.LSTM_LAYERS,
+                dropout=dropout
+            )
+        elif self.temporal_model == 'TRANSFORMER':
+            self.temporal_branch = SimplifiedMultiScaleTemporalTransformer(
+                input_size=temporal_input_size,
+                hidden_size=hidden_size,
+                model_dim=config.LSTM_HIDDEN_SIZE,
+                num_layers=config.LSTM_LAYERS,
+                dropout=dropout
+            )
+        elif self.temporal_model == 'TRANSFORMER_FULL':
+            self.temporal_branch = FullMultiScaleTemporalTransformer(
+                input_size=temporal_input_size,
+                hidden_size=hidden_size,
+                model_dim=getattr(config, 'TRANSFORMER_FULL_MODEL_DIM', 256),
+                hourly_layers=getattr(config, 'TRANSFORMER_FULL_HOURLY_LAYERS', 4),
+                daily_layers=getattr(config, 'TRANSFORMER_FULL_DAILY_LAYERS', 3),
+                nhead=getattr(config, 'TRANSFORMER_FULL_HEADS', 8),
+                ff_multiplier=getattr(config, 'TRANSFORMER_FULL_FF_MULTIPLIER', 4),
+                dropout=dropout
+            )
+        elif self.temporal_model == 'BIGRU':
+            self.temporal_branch = SimplifiedMultiScaleTemporalBiGRU(
+                input_size=temporal_input_size,
+                hidden_size=hidden_size,
+                gru_hidden=config.LSTM_HIDDEN_SIZE,
+                gru_layers=config.LSTM_LAYERS,
+                dropout=dropout
+            )
+        else:
+            self.temporal_branch = SimplifiedMultiScaleTemporal(
+                input_size=temporal_input_size,
+                hidden_size=hidden_size,
+                lstm_hidden=config.LSTM_HIDDEN_SIZE,
+                lstm_layers=config.LSTM_LAYERS,
+                dropout=dropout
+            )
 
         # Spatial branch: Choose model type
+        spatial_model = "GINE" if spatial_model == "GIN" else spatial_model
+
         if spatial_model == "GINE":
             self.spatial_branch = PureGraphDualYearGINE(
                 input_size=config.LAPLACIAN_PE_DIM,
@@ -78,8 +180,37 @@ class EnhancedDualBranchModel(nn.Module):
             self.use_laplacian_pe = True
             self.laplacian_pe_2021 = None
             self.laplacian_pe_2024 = None
+        elif spatial_model == "GAT":
+            self.spatial_branch = PureGraphDualYearGAT(
+                input_size=spatial_input_size,
+                hidden_size=config.SPATIAL_HIDDEN_SIZE,
+                num_layers=config.SPATIAL_LAYERS,
+                dropout=dropout,
+                output_size=hidden_size,
+                heads=1
+            )
+            self.use_laplacian_pe = False
         elif spatial_model == "SAGE":
             self.spatial_branch = PureGraphDualYearSAGE(
+                input_size=spatial_input_size,
+                hidden_size=config.SPATIAL_HIDDEN_SIZE,
+                num_layers=config.SPATIAL_LAYERS,
+                dropout=dropout,
+                output_size=hidden_size
+            )
+            self.use_laplacian_pe = False
+        elif spatial_model == "WGCN":
+            self.spatial_branch = PureGraphDualYearWGCN(
+                input_size=spatial_input_size,
+                hidden_size=config.SPATIAL_HIDDEN_SIZE,
+                num_layers=config.SPATIAL_LAYERS,
+                dropout=dropout,
+                output_size=hidden_size
+            )
+            self.use_laplacian_pe = False
+        elif spatial_model == "EVOLVEGCN":
+            self.spatial_branch = PureGraphDualYearEvolveGCN(
+                input_size=spatial_input_size,
                 hidden_size=config.SPATIAL_HIDDEN_SIZE,
                 num_layers=config.SPATIAL_LAYERS,
                 dropout=dropout,
@@ -88,6 +219,7 @@ class EnhancedDualBranchModel(nn.Module):
             self.use_laplacian_pe = False
         else:  # Default to GCN
             self.spatial_branch = PureGraphDualYearGCN(
+                input_size=spatial_input_size,
                 hidden_size=config.SPATIAL_HIDDEN_SIZE,
                 num_layers=config.SPATIAL_LAYERS,
                 dropout=dropout,
@@ -102,9 +234,11 @@ class EnhancedDualBranchModel(nn.Module):
             dropout=dropout
         )
 
+        classifier_input_size = hidden_size * 6 if self.fusion_ablation_mode == 'concat' else hidden_size
+
         # Single 9-class classification head
         self.classifier = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
+            nn.Linear(classifier_input_size, hidden_size // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_size // 2, num_classes)
@@ -131,7 +265,8 @@ class EnhancedDualBranchModel(nn.Module):
                 device=device
             )
 
-    def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, num_nodes, node_indices=None):
+    def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, num_nodes, node_indices=None,
+                raw_x_2021=None, raw_x_2024=None):
         """
         Forward pass
 
@@ -165,8 +300,13 @@ class EnhancedDualBranchModel(nn.Module):
         # Stack temporal features: (batch_size, 3, hidden_size)
         temporal_features = torch.stack([temporal_2021, temporal_2024, temporal_diff], dim=1)
 
+        if self.branch_ablation_mode == 'spatial_only':
+            temporal_features = torch.zeros_like(temporal_features)
+
         # Extract spatial features
-        if self.use_laplacian_pe:
+        if self.branch_ablation_mode == 'temporal_only':
+            spatial_features = torch.zeros_like(temporal_features)
+        elif self.use_laplacian_pe:
             # Compute Laplacian PE if needed
             self.compute_laplacian_pe_if_needed(graphs_2021, graphs_2024, num_nodes, x_2021.device)
 
@@ -178,23 +318,58 @@ class EnhancedDualBranchModel(nn.Module):
                 node_features_2024=self.laplacian_pe_2024,
                 node_indices=node_indices
             )
+
+            # Stack spatial features: (batch_size, 3, hidden_size)
+            spatial_features = torch.stack([spatial_2021, spatial_2024, spatial_diff], dim=1)
         else:
             # GCN/SAGE forward (featureless)
+            spatial_node_features_2021 = None
+            spatial_node_features_2024 = None
+            if self.spatial_node_feature_mode == 'temporal_mean':
+                # Direction3: derive node features from raw temporal signals (no handcrafted externals).
+                spatial_node_features_2021 = x_2021.mean(dim=1)  # (num_nodes, temporal_input_size)
+                spatial_node_features_2024 = x_2024.mean(dim=1)  # (num_nodes, temporal_input_size)
+            elif self.spatial_node_feature_mode == 'annual_daily_mean':
+                # Annual daily average total flow per node/year (1-dim):
+                # sum over inflow+outflow per hour -> daily totals (7 values) -> daily mean.
+                daily_total_2021 = x_2021.sum(dim=2).view(x_2021.shape[0], 7, 24).sum(dim=2)
+                daily_total_2024 = x_2024.sum(dim=2).view(x_2024.shape[0], 7, 24).sum(dim=2)
+                spatial_node_features_2021 = daily_total_2021.mean(dim=1, keepdim=True)
+                spatial_node_features_2024 = daily_total_2024.mean(dim=1, keepdim=True)
+            elif self.spatial_node_feature_mode == 'annual_daily_mean_2d':
+                # Annual daily average per channel (2-dim): [daily_mean_inflow, daily_mean_outflow].
+                daily_inout_2021 = x_2021.view(x_2021.shape[0], 7, 24, x_2021.shape[2]).sum(dim=2)
+                daily_inout_2024 = x_2024.view(x_2024.shape[0], 7, 24, x_2024.shape[2]).sum(dim=2)
+                spatial_node_features_2021 = daily_inout_2021.mean(dim=1)
+                spatial_node_features_2024 = daily_inout_2024.mean(dim=1)
+            elif self.spatial_node_feature_mode == 'raw_temporal_mean':
+                if raw_x_2021 is None or raw_x_2024 is None:
+                    raise ValueError("raw_temporal_mean requires raw_x_2021/raw_x_2024 tensors")
+                # Use raw inflow/outflow means as spatial node features (no log transform).
+                spatial_node_features_2021 = raw_x_2021.mean(dim=1)
+                spatial_node_features_2024 = raw_x_2024.mean(dim=1)
+
             spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
                 graphs_2021=graphs_2021,
                 graphs_2024=graphs_2024,
                 num_nodes=num_nodes,
-                node_indices=node_indices
+                node_indices=node_indices,
+                node_features_2021=spatial_node_features_2021,
+                node_features_2024=spatial_node_features_2024
             )
 
-        # Stack spatial features: (batch_size, 3, hidden_size)
-        spatial_features = torch.stack([spatial_2021, spatial_2024, spatial_diff], dim=1)
+            # Stack spatial features: (batch_size, 3, hidden_size)
+            spatial_features = torch.stack([spatial_2021, spatial_2024, spatial_diff], dim=1)
 
         # Concatenate temporal and spatial features: (batch_size, 6, hidden_size)
         all_features = torch.cat([temporal_features, spatial_features], dim=1)
 
-        # Gated fusion
-        fused = self.fusion(all_features)  # (batch_size, hidden_size)
+        if self.fusion_ablation_mode == 'concat':
+            fused = all_features.reshape(all_features.size(0), -1)
+        elif self.fusion_ablation_mode == 'mean':
+            fused = all_features.mean(dim=1)
+        else:
+            fused = self.fusion(all_features)  # (batch_size, hidden_size)
 
         # Classification
         logits = self.classifier(fused)  # (batch_size, num_classes)
@@ -310,42 +485,6 @@ class AlternativeEnhancedModel(nn.Module):
         logits = self.classifier(fused)
 
         return logits
-
-
-# Monkey-patch SimplifiedMultiScaleTemporal to add extract_features_single method
-def extract_features_single(self, x):
-    """
-    Extract features from a single year's time series
-
-    FIXED: Now uses separate LSTMs for hourly and daily processing
-    Updated: Supports 2-feature input [inflow, outflow]
-    """
-    # Process hourly with dedicated LSTM
-    _, (h_hourly_n, _) = self.lstm_hourly(x)
-    h_hourly = self.proj_hourly(h_hourly_n[-1])
-
-    # Process daily (sum over 24 hours for true daily flow) with dedicated LSTM
-    x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
-    _, (h_daily_n, _) = self.lstm_daily(x_daily)
-    h_daily = self.proj_daily(h_daily_n[-1])
-
-    # Weekly stats (sum, max, mean for traffic characteristics)
-    weekly_sum = x.sum(dim=1)      # Total weekly flow
-    weekly_max = x.max(dim=1)[0]   # Peak flow
-    weekly_mean = x.mean(dim=1)    # Average flow
-    trend = (x[:, -1, :] - x[:, 0, :]) / 168
-    stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
-    h_weekly = self.weekly_net(stats)
-
-    # Concatenate and fuse
-    multi_scale = torch.cat([h_hourly, h_daily, h_weekly], dim=1)
-    output = self.fusion(multi_scale)
-
-    return output
-
-
-# Attach the method
-SimplifiedMultiScaleTemporal.extract_features_single = extract_features_single
 
 
 if __name__ == "__main__":

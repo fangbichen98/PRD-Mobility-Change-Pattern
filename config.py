@@ -32,6 +32,15 @@ USE_KNN_FALLBACK = True  # Use KNN fallback for isolated nodes (based on spatial
 KNN_FALLBACK_K = 8  # Number of nearest neighbors for KNN fallback
 KNN_FALLBACK_WEIGHT = 0.5  # Weight for KNN fallback edges (lower priority than flow edges)
 
+# Optional node-wise edge sparsification (disabled by default)
+# Keep top-k outgoing/incoming edges per node and take union.
+GRAPH_TOPK_OUT = None
+GRAPH_TOPK_IN = None
+# Graph temporal mode for spatial branch:
+# - "static": single aggregated graph per year (current default)
+# - "daily": 7 discrete daily snapshots per year (fixed topology + dynamic edge weights)
+GRAPH_TEMPORAL_MODE = "static"
+
 # Coordinate validation ranges (used by data_processor.py)
 LON_RANGE = (-180, 180)
 LAT_RANGE = (-90, 90)
@@ -49,18 +58,33 @@ RANDOM_SEED = 42   # Random seed for reproducibility
 # ==============================================================================
 # Multi-Scale Temporal Branch (LSTM-based)
 TEMPORAL_INPUT_SIZE = 2  # Input feature dimension: 
+TEMPORAL_MODEL = "LSTM"  # Options: "LSTM", "GRU", "TCN", "TRANSFORMER", "TRANSFORMER_FULL", "BIGRU"
 LSTM_LAYERS = 3          # Number of LSTM layers
 LSTM_HIDDEN_SIZE = 256   # LSTM hidden units
 LSTM_DROPOUT = 0.4       # LSTM dropout rate
 
+# Full-capacity transformer temporal branch (used when TEMPORAL_MODEL="TRANSFORMER_FULL")
+TRANSFORMER_FULL_MODEL_DIM = 256
+TRANSFORMER_FULL_HOURLY_LAYERS = 4
+TRANSFORMER_FULL_DAILY_LAYERS = 3
+TRANSFORMER_FULL_HEADS = 8
+TRANSFORMER_FULL_FF_MULTIPLIER = 4
+
 # ==============================================================================
 # MODEL ARCHITECTURE - SPATIAL BRANCH
 # ==============================================================================
-# Spatial Branch Options: GCN, GraphSAGE, or GINE
-SPATIAL_MODEL = "GCN"        # Options: "GCN", "SAGE", "GINE"
-SPATIAL_LAYERS = 3           # Number of spatial layers
+# Spatial Branch Options: GCN, GraphSAGE, weighted GraphConv, EvolveGCN-inspired, or GINE
+SPATIAL_MODEL = "GCN"        # Options: "GCN", "SAGE", "WGCN", "EVOLVEGCN", "GINE"
+SPATIAL_LAYERS = 2           # Number of spatial layers
 SPATIAL_HIDDEN_SIZE = 128    # Spatial branch hidden units
 LAPLACIAN_PE_DIM = 16        # Laplacian Positional Encoding dimension (for GINE)
+# Spatial node feature mode for non-GINE branches:
+# - "ones": featureless all-1 node input (default)
+# - "temporal_mean": use per-node mean over 168x2 temporal sequence as node features
+# - "annual_daily_mean": use per-node annual daily-average total flow (1-dim)
+# - "annual_daily_mean_2d": use per-node annual daily-average inflow/outflow (2-dim)
+# - "raw_temporal_mean": use per-node mean over raw 168x2 inflow/outflow (no log)
+SPATIAL_NODE_FEATURE_MODE = "raw_temporal_mean"
 # Note: GCN doesn't use attention heads (unlike GAT)
 # Legacy GAT_* parameters are kept for backward compatibility
 SPATIAL_HEADS = 4            # Deprecated: Not used by GCN (only for GAT)
@@ -81,6 +105,9 @@ LEARNING_RATE = 0.0001    # Initial learning rate
 WEIGHT_DECAY = 1e-3       # L2 regularization
 NUM_EPOCHS = 300          # Maximum number of training epochs
 EARLY_STOPPING_PATIENCE =20  # Stop if no improvement for N epochs
+GRADIENT_ACCUMULATION = 4  # Effective batch = BATCH_SIZE * GRADIENT_ACCUMULATION
+SCHEDULER_PATIENCE = 5     # ReduceLROnPlateau patience
+SCHEDULER_FACTOR = 0.5     # ReduceLROnPlateau factor
 
 # ==============================================================================
 # CONFIGURATION SUMMARY

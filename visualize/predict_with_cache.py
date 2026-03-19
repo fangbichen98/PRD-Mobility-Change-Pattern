@@ -14,8 +14,11 @@ import json
 import os
 import sys
 import math
+import glob
 from tqdm import tqdm
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.append('src')
 
 from models.enhanced_dual_branch_model import EnhancedDualBranchModel
@@ -96,11 +99,248 @@ def load_cached_data(cache_path):
     print(f"  - Total grids in mapping: {len(data['grid_id_to_idx'])}")
     print(f"  - Graph 2021 edges: {data['graphs_2021'][0][0].shape[1]}")
     print(f"  - Graph 2024 edges: {data['graphs_2024'][0][0].shape[1]}")
+    if 'train_flow_grid_ids' in data:
+        print(f"  - Training-flow grids: {len(data['train_flow_grid_ids'])}")
+    if data.get('train_flow_label_hash'):
+        print(f"  - Training-flow label hash: {data['train_flow_label_hash']}")
+    if data.get('train_flow_total_samples') is not None:
+        print(f"  - Training-flow total samples: {data['train_flow_total_samples']}")
+    if data.get('train_flow_cache_file'):
+        print(f"  - Training-flow cache source: {data['train_flow_cache_file']}")
     return data
 
-def load_model(model_path, device):
+
+def resolve_train_flow_grids(cached_data: dict):
+    """Resolve which nodes should receive temporal/raw-flow inputs at inference time."""
+    explicit_train_grids = cached_data.get('train_flow_grid_ids')
+    if explicit_train_grids is not None:
+        return set(explicit_train_grids), 'train_flow_grid_ids'
+
+    flows_2021 = cached_data.get('flows_2021', {})
+    flows_2024 = cached_data.get('flows_2024', {})
+    fallback_grids = set(flows_2021.keys()) | set(flows_2024.keys())
+    print(
+        "WARNING: cache is missing explicit train_flow_grid_ids; "
+        "falling back to flows_* keys, which may not match training semantics."
+    )
+    return fallback_grids, 'flows_keys_fallback'
+
+
+def use_strict_train_flow_mask() -> bool:
+    """Whether to force inference inputs to match the training-flow mask exactly."""
+    value = os.environ.get('STRICT_TRAIN_FLOW_MASK', '').strip().lower()
+    return value in {'1', 'true', 'yes', 'y'}
+
+
+def use_train_flow_mask_for_spatial_raw(manifest: dict = None) -> bool:
+    """Whether raw spatial node features should be masked to the training-flow support."""
+    value = os.environ.get('SPATIAL_RAW_MASK_MODE', '').strip().lower()
+    if value in {'all', 'full', 'none', '0', 'false', 'no'}:
+        return False
+    if value in {'train', 'mask', 'strict', '1', 'true', 'yes'}:
+        return True
+
+    node_mode = infer_node_mode_from_manifest(manifest) if manifest else None
+    return node_mode == 'raw_temporal_mean'
+
+
+def load_experiment_manifest(experiment_dir: Path):
+    """Load training metadata from test_results for consistency checks."""
+    manifest_path = experiment_dir / 'metrics' / 'test_results.json'
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Missing manifest file: {manifest_path}")
+
+    with open(manifest_path, 'r', encoding='utf-8') as f:
+        manifest = json.load(f)
+
+    return manifest
+
+
+def infer_spatial_model_from_manifest(manifest: dict) -> str:
+    spatial_type = (
+        manifest.get('model_architecture', {})
+        .get('spatial_branch', {})
+        .get('type', '')
+        .upper()
+    )
+    if 'EVOLVEGCN' in spatial_type:
+        return 'EVOLVEGCN'
+    if 'GINE' in spatial_type:
+        return 'GINE'
+    if 'WGCN' in spatial_type:
+        return 'WGCN'
+    if 'SAGE' in spatial_type:
+        return 'SAGE'
+    if 'GAT' in spatial_type:
+        return 'GAT'
+    return 'GCN'
+
+
+def infer_node_mode_from_manifest(manifest: dict):
+    return (
+        manifest.get('model_architecture', {})
+        .get('spatial_branch', {})
+        .get('node_feature_mode')
+    )
+
+
+def cache_matches_train_flow_manifest(cached_data: dict, manifest: dict) -> bool:
+    expected = manifest.get('data_info', {})
+    expected_total = expected.get('total_samples')
+    expected_hash = expected.get('label_file_hash')
+
+    train_flow_grid_ids = cached_data.get('train_flow_grid_ids')
+    if train_flow_grid_ids is None:
+        return False
+
+    if expected_total is not None and len(train_flow_grid_ids) != int(expected_total):
+        return False
+
+    cache_hash = cached_data.get('train_flow_label_hash') or cached_data.get('label_file_hash')
+    if expected_hash and cache_hash and cache_hash != expected_hash:
+        return False
+
+    cache_total = cached_data.get('train_flow_total_samples')
+    if cache_total is not None and expected_total is not None and int(cache_total) != int(expected_total):
+        return False
+
+    return True
+
+
+def validate_inference_consistency(cached_data: dict, manifest: dict, cache_path: str):
+    """
+    Validate whether inference cache is consistent with training setup.
+
+    We fail fast on critical mismatches to prevent misleading visualization outputs.
+    """
+    expected = manifest.get('data_info', {})
+    expected_e2021 = expected.get('graph_2021_edges')
+    expected_e2024 = expected.get('graph_2024_edges')
+
+    actual_e2021 = int(cached_data['graphs_2021'][0][0].shape[1])
+    actual_e2024 = int(cached_data['graphs_2024'][0][0].shape[1])
+
+    mismatches = []
+    if expected_e2021 is not None and int(expected_e2021) != actual_e2021:
+        mismatches.append(f"graph_2021_edges expected {expected_e2021} but got {actual_e2021}")
+    if expected_e2024 is not None and int(expected_e2024) != actual_e2024:
+        mismatches.append(f"graph_2024_edges expected {expected_e2024} but got {actual_e2024}")
+
+    trained_spatial_model = infer_spatial_model_from_manifest(manifest)
+    runtime_spatial_model = getattr(config, 'SPATIAL_MODEL', 'GCN')
+    if trained_spatial_model != runtime_spatial_model:
+        mismatches.append(
+            f"SPATIAL_MODEL expected {trained_spatial_model} but current config is {runtime_spatial_model}"
+        )
+
+    trained_node_mode = infer_node_mode_from_manifest(manifest)
+    runtime_node_mode = getattr(config, 'SPATIAL_NODE_FEATURE_MODE', 'ones')
+    if trained_node_mode and trained_node_mode != runtime_node_mode:
+        mismatches.append(
+            f"SPATIAL_NODE_FEATURE_MODE expected {trained_node_mode} but current config is {runtime_node_mode}"
+        )
+
+    if trained_node_mode == 'raw_temporal_mean' and 'train_flow_grid_ids' not in cached_data:
+        mismatches.append(
+            "cache missing explicit train_flow_grid_ids required to reproduce training-time raw-flow masking"
+        )
+    if trained_node_mode == 'raw_temporal_mean' and not cache_matches_train_flow_manifest(cached_data, manifest):
+        expected_total = expected.get('total_samples')
+        expected_hash = expected.get('label_file_hash')
+        actual_total = len(cached_data.get('train_flow_grid_ids', []))
+        actual_hash = cached_data.get('train_flow_label_hash') or cached_data.get('label_file_hash')
+        mismatches.append(
+            "training-flow mask provenance mismatch "
+            f"(expected label_hash={expected_hash}, total_samples={expected_total}; "
+            f"got label_hash={actual_hash}, train_flow_grids={actual_total})"
+        )
+
+    if mismatches:
+        detail = '\n  - '.join(mismatches)
+        raise RuntimeError(
+            "Inference/visualization consistency check failed.\n"
+            f"Cache file: {cache_path}\n"
+            f"Experiment: {EXPERIMENT_DIR}\n"
+            f"Mismatches:\n  - {detail}\n"
+            "Please use a cache generated with the same graph/model settings as training."
+        )
+
+
+def resolve_cache_path_from_manifest(default_cache_path: str, manifest: dict) -> str:
+    """Pick a cache file whose graph edge counts match the experiment manifest."""
+    if os.environ.get('VIS_CACHE_PATH'):
+        return default_cache_path
+
+    expected = manifest.get('data_info', {})
+    expected_e2021 = expected.get('graph_2021_edges')
+    expected_e2024 = expected.get('graph_2024_edges')
+    trained_node_mode = infer_node_mode_from_manifest(manifest)
+    require_train_flow_match = trained_node_mode == 'raw_temporal_mean'
+    if expected_e2021 is None or expected_e2024 is None:
+        return default_cache_path
+
+    expected_e2021 = int(expected_e2021)
+    expected_e2024 = int(expected_e2024)
+
+    candidate_paths = []
+    if os.path.exists(default_cache_path):
+        candidate_paths.append(default_cache_path)
+    candidate_paths.extend(sorted(glob.glob('data/cache/dual_year_data_*.pkl')))
+
+    best_path = None
+    best_score = None
+
+    for path in candidate_paths:
+        try:
+            with open(path, 'rb') as f:
+                data = pickle.load(f)
+            actual_e2021 = int(data['graphs_2021'][0][0].shape[1])
+            actual_e2024 = int(data['graphs_2024'][0][0].shape[1])
+            if actual_e2021 != expected_e2021 or actual_e2024 != expected_e2024:
+                continue
+
+            train_flow_match = cache_matches_train_flow_manifest(data, manifest)
+            if require_train_flow_match and not train_flow_match:
+                continue
+
+            feature_count = len(data.get('change_features', {}))
+            has_train_mask = 'train_flow_grid_ids' in data
+            score = (
+                1 if train_flow_match else 0,
+                1 if has_train_mask else 0,
+                feature_count,
+            )
+            if best_score is None or score > best_score:
+                best_score = score
+                best_path = path
+        except Exception:
+            continue
+
+    if best_path:
+        print(
+            f"Auto-selected VIS cache by edge match: {best_path} "
+            f"(score={best_score}, "
+            f"expected_edges=({expected_e2021},{expected_e2024}))"
+        )
+        return best_path
+
+    return default_cache_path
+
+def infer_temporal_model_from_manifest(manifest: dict) -> str:
+    return (
+        manifest.get('model_architecture', {})
+        .get('temporal_branch', {})
+        .get('temporal_model', 'LSTM')
+        .upper()
+    )
+
+
+def load_model(model_path, device, manifest: dict = None):
     """Load the best trained model"""
     print(f"\nLoading model from {model_path}...")
+
+    temporal_model = infer_temporal_model_from_manifest(manifest) if manifest else 'LSTM'
+    print(f"Using TEMPORAL_MODEL from manifest: {temporal_model}")
 
     model = EnhancedDualBranchModel(
         temporal_input_size=config.TEMPORAL_INPUT_SIZE,
@@ -109,14 +349,20 @@ def load_model(model_path, device):
         num_time_steps=config.TIME_STEPS,
         dropout=0.4,
         spatial_model=config.SPATIAL_MODEL,
+        temporal_model=temporal_model,
     ).to(device)
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
     if 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        missing, unexpected = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     else:
-        model.load_state_dict(checkpoint, strict=False)
+        missing, unexpected = model.load_state_dict(checkpoint, strict=False)
+
+    if missing:
+        print(f"  WARNING: {len(missing)} missing keys in checkpoint")
+    if unexpected:
+        print(f"  WARNING: {len(unexpected)} unexpected keys in checkpoint")
 
     model.eval()
     print(f"✓ Model loaded successfully")
@@ -161,14 +407,62 @@ def predict_grids_with_features(model, cached_data, device, batch_size=64):
 
     num_nodes = len(cached_data['grid_id_to_idx'])
 
-    # Create full size temporal tensors for model inputs
+    # Create full size temporal tensors for model inputs.
+    # Default behavior for full-grid visualization is to use all available full-grid
+    # temporal/raw-flow features. The training-flow mask is still tracked for provenance
+    # and can be enforced explicitly via STRICT_TRAIN_FLOW_MASK=1 when needed.
     full_temporal_2021 = torch.zeros((num_nodes, 168, 2), dtype=torch.float32).to(device)
     full_temporal_2024 = torch.zeros((num_nodes, 168, 2), dtype=torch.float32).to(device)
 
+    flows_2021 = cached_data.get('flows_2021', {})
+    flows_2024 = cached_data.get('flows_2024', {})
+    train_flow_grids, train_flow_source = resolve_train_flow_grids(cached_data)
+    strict_train_flow_mask = use_strict_train_flow_mask()
+    spatial_raw_train_mask = use_train_flow_mask_for_spatial_raw(load_experiment_manifest(Path(EXPERIMENT_DIR)))
+
+    filled_temporal = 0
+
     for i, grid_id in enumerate(grid_ids):
-        node_idx = cached_data['grid_id_to_idx'][grid_id]
-        full_temporal_2021[node_idx] = all_temporal_2021[i]
-        full_temporal_2024[node_idx] = all_temporal_2024[i]
+        if not strict_train_flow_mask or grid_id in train_flow_grids:
+            node_idx = cached_data['grid_id_to_idx'][grid_id]
+            full_temporal_2021[node_idx] = all_temporal_2021[i]
+            full_temporal_2024[node_idx] = all_temporal_2024[i]
+            filled_temporal += 1
+
+    print(
+        f"  Grids filled into full_temporal ({'strict training-flow mask' if strict_train_flow_mask else 'all cached full-grid features'}): "
+        f"{filled_temporal} / {len(grid_ids)}"
+    )
+    if strict_train_flow_mask:
+        print(f"  - strict mask source: {train_flow_source}")
+    else:
+        print(f"  - training-flow provenance retained for validation only: {len(train_flow_grids)} grids from {train_flow_source}")
+
+    # Raw flows for spatial raw_temporal_mean mode.
+    # Keep this aligned with training semantics by default: during training the
+    # raw spatial node features only existed on the sampled training-support grids.
+    full_raw_temporal_2021 = torch.zeros((num_nodes, 168, 2), dtype=torch.float32).to(device)
+    full_raw_temporal_2024 = torch.zeros((num_nodes, 168, 2), dtype=torch.float32).to(device)
+    filled_raw_2021 = 0
+    for grid_id, flow in flows_2021.items():
+        if grid_id in cached_data['grid_id_to_idx'] and (not spatial_raw_train_mask or grid_id in train_flow_grids):
+            idx = cached_data['grid_id_to_idx'][grid_id]
+            full_raw_temporal_2021[idx] = torch.tensor(np.array(flow), dtype=torch.float32).to(device)
+            filled_raw_2021 += 1
+    filled_raw_2024 = 0
+    for grid_id, flow in flows_2024.items():
+        if grid_id in cached_data['grid_id_to_idx'] and (not spatial_raw_train_mask or grid_id in train_flow_grids):
+            idx = cached_data['grid_id_to_idx'][grid_id]
+            full_raw_temporal_2024[idx] = torch.tensor(np.array(flow), dtype=torch.float32).to(device)
+            filled_raw_2024 += 1
+
+    print(
+        f"  Grids filled into full_raw_temporal ({'training-flow support' if spatial_raw_train_mask else 'all cached raw features'}): "
+        f"{filled_raw_2021} / {len(flows_2021)} (2021), "
+        f"{filled_raw_2024} / {len(flows_2024)} (2024)"
+    )
+    if spatial_raw_train_mask:
+        print(f"  - spatial raw mask source: {train_flow_source}")
 
     # Predict in batches
     all_predictions = []
@@ -187,7 +481,9 @@ def predict_grids_with_features(model, cached_data, device, batch_size=64):
                     graphs_2021=graphs_2021,
                     graphs_2024=graphs_2024,
                     num_nodes=num_nodes,
-                    node_indices=batch_node_indices
+                    node_indices=batch_node_indices,
+                    raw_x_2021=full_raw_temporal_2021,
+                    raw_x_2024=full_raw_temporal_2024,
                 )
 
                 predictions = torch.argmax(logits, dim=1).cpu().numpy() + 1
@@ -260,15 +556,8 @@ def plot_full_region_map(pred_df, output_dir):
 
     # Single merged legend (journal-friendly, avoids excessive right-side blocks)
     merged_handles = [
-        mpatches.Patch(color=CLASS_COLORS[1], label='Stable Static'),
-        mpatches.Patch(color=CLASS_COLORS[2], label='Stable Aggregation'),
-        mpatches.Patch(color=CLASS_COLORS[3], label='Stable Dispersion'),
-        mpatches.Patch(color=CLASS_COLORS[4], label='Growth Static'),
-        mpatches.Patch(color=CLASS_COLORS[5], label='Growth Aggregation'),
-        mpatches.Patch(color=CLASS_COLORS[6], label='Growth Dispersion'),
-        mpatches.Patch(color=CLASS_COLORS[7], label='Decline Static'),
-        mpatches.Patch(color=CLASS_COLORS[8], label='Decline Aggregation'),
-        mpatches.Patch(color=CLASS_COLORS[9], label='Decline Dispersion'),
+        mpatches.Patch(color=CLASS_COLORS[class_id], label=CLASS_NAMES[class_id])
+        for class_id in range(1, 10)
     ]
     ax.legend(handles=merged_handles, title='Legend',
               loc='upper left', bbox_to_anchor=(1.02, 1.0), ncol=1,
@@ -552,7 +841,10 @@ def save_predictions(pred_df, output_dir):
 def main():
     """Main function"""
     # Configuration
-    cache_path = "/root/workspace/Graph_Deep_Learning/20251001-PRD_18-21-24-mobility_change_pattern/analysis/PRD-Mobility-Change-Pattern/data/cache/dual_year_data_all_grids.pkl"
+    cache_path = os.environ.get(
+        'VIS_CACHE_PATH',
+        "/root/workspace/Graph_Deep_Learning/20251001-PRD_18-21-24-mobility_change_pattern/analysis/PRD-Mobility-Change-Pattern/data/cache/dual_year_data_all_grids.pkl"
+    )
     model_path = str(EXPERIMENT_DIR / 'models' / 'best_model.pth')
     grid_metadata_path = "data/grid_metadata/sgh_grid_metadata.csv"
 
@@ -568,11 +860,29 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"\nUsing device: {device}")
 
+    # Load manifest from experiment outputs and align runtime config.
+    manifest = load_experiment_manifest(EXPERIMENT_DIR)
+    cache_path = resolve_cache_path_from_manifest(cache_path, manifest)
+    config.SPATIAL_MODEL = infer_spatial_model_from_manifest(manifest)
+    manifest_node_mode = (
+        manifest.get('model_architecture', {})
+        .get('spatial_branch', {})
+        .get('node_feature_mode')
+    )
+    if manifest_node_mode:
+        config.SPATIAL_NODE_FEATURE_MODE = manifest_node_mode
+    print(f"Using SPATIAL_MODEL from manifest: {config.SPATIAL_MODEL}")
+    print(f"Using SPATIAL_NODE_FEATURE_MODE from manifest: {getattr(config, 'SPATIAL_NODE_FEATURE_MODE', 'ones')}")
+
     # Load cached data
     cached_data = load_cached_data(cache_path)
 
+    # Fail fast if cache/model/training settings do not match.
+    validate_inference_consistency(cached_data, manifest, cache_path)
+    print("✓ Inference consistency check passed")
+
     # Load model
-    model = load_model(model_path, device)
+    model = load_model(model_path, device, manifest=manifest)
 
     # Predict
     predictions, grid_ids = predict_grids_with_features(model, cached_data, device, batch_size=64)

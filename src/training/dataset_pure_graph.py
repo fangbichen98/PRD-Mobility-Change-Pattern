@@ -72,7 +72,9 @@ class PureGraphBatchCollator:
                  graphs_2024: List[tuple],
                  grid_id_to_idx: Dict[int, int],
                  all_temporal_2021: torch.Tensor,
-                 all_temporal_2024: torch.Tensor):
+                 all_temporal_2024: torch.Tensor,
+                 all_raw_temporal_2021: torch.Tensor = None,
+                 all_raw_temporal_2024: torch.Tensor = None):
         """
         Initialize collator
 
@@ -88,6 +90,8 @@ class PureGraphBatchCollator:
         self.grid_id_to_idx = grid_id_to_idx
         self.all_temporal_2021 = all_temporal_2021
         self.all_temporal_2024 = all_temporal_2024
+        self.all_raw_temporal_2021 = all_raw_temporal_2021
+        self.all_raw_temporal_2024 = all_raw_temporal_2024
         self.num_nodes = len(grid_id_to_idx)
 
     def __call__(self, batch):
@@ -116,7 +120,9 @@ class PureGraphBatchCollator:
             'num_nodes': self.num_nodes,
             # Full temporal features (for extracting batch)
             'all_temporal_2021': self.all_temporal_2021,
-            'all_temporal_2024': self.all_temporal_2024
+            'all_temporal_2024': self.all_temporal_2024,
+            'all_raw_temporal_2021': self.all_raw_temporal_2021,
+            'all_raw_temporal_2024': self.all_raw_temporal_2024
         }
 
 

@@ -47,7 +47,15 @@
 
 - `data/cache/dual_year_data_all_grids.pkl`
   - 全域格网时序特征缓存（用于加速推理）。
-  - 由 `dual_year_data_a758cd48f656.pkl` 和原始 OD 数据加工扩展得到。
+  - 由训练 feature cache 和原始 OD 数据加工扩展得到。
+  - 必须保留 `train_flow_grid_ids` 字段，但它主要用于实验来源校验，以及恢复 `raw_temporal_mean` 下 spatial raw 节点特征的训练支持集。
+  - 当前正确的推理语义不是“所有输入都按训练流量节点掩码置零”，而是：
+    - temporal branch 使用全域 cache 中每个被预测节点自己的时序特征；
+    - spatial branch 的 raw node feature 默认按 `train_flow_grid_ids` 掩码恢复训练支持集。
+  - 如果把 temporal branch 也错误地按 2250 个训练流量节点清零，会导致全图类别分布塌缩。
+  - 如果把 spatial raw node feature 错误扩展到 65049 个全图节点，也会改变 GCN 输入分布，明显压低 Decline Static（Class 7）等类别。
+  - 对 `raw_temporal_mean` 实验，建议同时包含 `train_flow_label_hash`、`train_flow_total_samples`、`train_flow_cache_file`，用于校验训练流量掩码来源是否与当前实验一致。
+  - 若该字段缺失，需要先重新运行 `extract_all_features.py` 重建 cache。
 
 - `models/best_model.pth`
   - 当前实验最优模型权重。
@@ -89,9 +97,11 @@
    - `models/best_model.pth`
    - `data/cache/dual_year_data_all_grids.pkl`
    - `data/grid_metadata/sgh_grid_metadata.csv`
-2. 优先运行 `render_all_figures.py` 一键生成全部维护中的图件。
-3. 若只更新空间预测图，可单独运行 `predict_with_cache.py`。
-4. 若只更新评估图，可分别运行 `plot_classification_performance.py` 与 `plot_confusion_matrix.py`。
+2. 若 `dual_year_data_all_grids.pkl` 是旧版本，请先运行 `EXPERIMENT_DIR=outputs/当前实验 python extract_all_features.py`，确保其中包含 `train_flow_grid_ids` 及训练流量来源元数据。
+3. 对 `raw_temporal_mean` 实验，默认应保持“temporal 全图、spatial raw 按训练支持集”的推理方式，不要把 provenance 校验字段直接当作所有输入的统一掩码。
+4. 优先运行 `render_all_figures.py` 一键生成全部维护中的图件。
+5. 若只更新空间预测图，可单独运行 `predict_with_cache.py`。
+6. 若只更新评估图，可分别运行 `plot_classification_performance.py` 与 `plot_confusion_matrix.py`。
 
 ---
 

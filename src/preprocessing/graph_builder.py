@@ -6,7 +6,7 @@ import pandas as pd
 import torch
 from torch_geometric.data import Data
 from scipy.spatial import cKDTree
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -166,7 +166,9 @@ class SpatialGraphBuilder:
         return edge_index, edge_weights
 
     def build_flow_graph(self, od_df: pd.DataFrame, threshold: float = 0.0,
-                        include_neighbors: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+                        include_neighbors: bool = True,
+                        topk_out: Optional[int] = None,
+                        topk_in: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
         """
         Build graph based on OD flow patterns
 
@@ -267,11 +269,23 @@ class SpatialGraphBuilder:
         edge_index = np.array(final_edge_list).T if final_edge_list else np.zeros((2, 0))
         edge_weights = np.array(final_edge_weights) if final_edge_weights else np.array([])
 
+        # Optional node-wise sparsification: keep top-k outgoing/incoming edges per node.
+        if topk_out is not None or topk_in is not None:
+            edge_index, edge_weights = self._apply_nodewise_topk(
+                edge_index=edge_index,
+                edge_weights=edge_weights,
+                topk_out=topk_out,
+                topk_in=topk_in
+            )
+            # Keep list and array views consistent for downstream KNN fallback merge.
+            final_edge_list = edge_index.T.tolist()
+            final_edge_weights = edge_weights.tolist()
+
         logger.info(f"Created flow graph:")
         logger.info(f"  - Original labeled grids: {initial_node_count}")
         logger.info(f"  - Newly added neighbor grids: {len(newly_added)}")
         logger.info(f"  - Total nodes: {len(new_grid_id_to_idx)}")
-        logger.info(f"  - Total edges: {len(final_edge_list)}")
+        logger.info(f"  - Total edges: {edge_index.shape[1]}")
 
         # ====================================================================
         # GRAPH OPTIMIZATION: Intelligently supplement self-loops
@@ -320,6 +334,68 @@ class SpatialGraphBuilder:
                     logger.warning("  No KNN edges were added despite isolated nodes")
             else:
                 logger.info("Phase 2.2: No isolated nodes found (KNN fallback not needed)")
+
+        return edge_index, edge_weights
+
+    @staticmethod
+    def _topk_indices_by_group(groups: np.ndarray, weights: np.ndarray, k: Optional[int]) -> np.ndarray:
+        """Return original edge indices for top-k edges within each group."""
+        n = groups.shape[0]
+        if n == 0:
+            return np.array([], dtype=np.int64)
+
+        if k is None or k <= 0:
+            return np.arange(n, dtype=np.int64)
+
+        # Sort by group asc, weight desc
+        order = np.lexsort((-weights, groups))
+        sorted_groups = groups[order]
+
+        keep_mask_sorted = np.zeros(n, dtype=bool)
+        starts = np.r_[0, np.flatnonzero(np.diff(sorted_groups)) + 1]
+        ends = np.r_[starts[1:], n]
+
+        for start, end in zip(starts, ends):
+            keep_mask_sorted[start:min(start + k, end)] = True
+
+        return order[keep_mask_sorted]
+
+    def _apply_nodewise_topk(
+        self,
+        edge_index: np.ndarray,
+        edge_weights: np.ndarray,
+        topk_out: Optional[int],
+        topk_in: Optional[int]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Apply node-wise top-k filtering and keep union of outgoing/incoming selections.
+        Real self-loops are always preserved.
+        """
+        if edge_index.shape[1] == 0:
+            return edge_index, edge_weights
+
+        src = edge_index[0]
+        dst = edge_index[1]
+        weights = edge_weights.astype(np.float64, copy=False)
+
+        keep_out = self._topk_indices_by_group(src, weights, topk_out)
+        keep_in = self._topk_indices_by_group(dst, weights, topk_in)
+
+        keep_idx = np.union1d(keep_out, keep_in)
+
+        # Preserve self-loops from OD data regardless of top-k cut.
+        self_loop_idx = np.where(src == dst)[0]
+        if self_loop_idx.size > 0:
+            keep_idx = np.union1d(keep_idx, self_loop_idx)
+
+        before_edges = edge_index.shape[1]
+        edge_index = edge_index[:, keep_idx]
+        edge_weights = edge_weights[keep_idx]
+
+        logger.info(
+            f"Applied node-wise top-k filtering: out={topk_out}, in={topk_in} | "
+            f"edges {before_edges} -> {edge_index.shape[1]}"
+        )
 
         return edge_index, edge_weights
 

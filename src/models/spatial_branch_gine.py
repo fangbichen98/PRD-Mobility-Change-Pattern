@@ -104,6 +104,42 @@ class PureGraphDualYearGINE(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.act = F.relu
 
+    def _normalize_edge_attr(self, edge_attr: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize edge features to shape (num_edges, edge_dim) for GINEConv.
+
+        Some graph builders may output edge_attr as (E,), (1, E), or (E, 1).
+        GINEConv requires (E, edge_dim).
+        """
+        num_edges = edge_index.size(1)
+
+        if edge_attr is None:
+            return torch.ones(num_edges, self.edge_dim, device=edge_index.device)
+
+        edge_attr = edge_attr.float()
+
+        if edge_attr.dim() == 1:
+            edge_attr = edge_attr.unsqueeze(-1)
+        elif edge_attr.dim() == 2 and edge_attr.size(0) == 1 and edge_attr.size(1) == num_edges:
+            # Convert (1, E) -> (E, 1)
+            edge_attr = edge_attr.t().contiguous()
+        elif edge_attr.dim() > 2:
+            # Flatten unexpected high-rank shapes while preserving edge count
+            edge_attr = edge_attr.view(num_edges, -1)
+
+        # Ensure first dimension matches number of edges
+        if edge_attr.size(0) != num_edges:
+            edge_attr = edge_attr.view(num_edges, -1)
+
+        # Match configured edge_dim
+        if edge_attr.size(1) < self.edge_dim:
+            pad = torch.zeros(num_edges, self.edge_dim - edge_attr.size(1), device=edge_attr.device)
+            edge_attr = torch.cat([edge_attr, pad], dim=1)
+        elif edge_attr.size(1) > self.edge_dim:
+            edge_attr = edge_attr[:, :self.edge_dim]
+
+        return edge_attr
+
     def process_year(self, edge_index, edge_attr, node_features):
         """
         Process one year's graph with GINE
@@ -116,9 +152,9 @@ class PureGraphDualYearGINE(nn.Module):
         Returns:
             h_out: Node embeddings (num_nodes, output_size)
         """
-        # Log-transform edge weights for numerical stability
-        # GINE's MLP can handle this, but log transform helps with extreme values
-        edge_weights = torch.log1p(edge_attr.float())
+        # Normalize edge features to (E, edge_dim) then log-transform for stability.
+        edge_weights = self._normalize_edge_attr(edge_attr, edge_index)
+        edge_weights = torch.log1p(edge_weights)
 
         # Ensure edge_index is int64
         if edge_index.dtype != torch.long:

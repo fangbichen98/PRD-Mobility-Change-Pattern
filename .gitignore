@@ -1,6 +1,7 @@
 # 忽略数据文件
 data/
 outputs/
+paper/
 
 # 可选：忽略输出结果
 

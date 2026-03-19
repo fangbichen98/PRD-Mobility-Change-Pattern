@@ -59,6 +59,32 @@ Map figures require:
 - `data/grid_metadata/sgh_grid_metadata.csv`
 - `outputs/.../models/best_model.pth`
 
+The full-grid cache must preserve `train_flow_grid_ids` from the original training feature cache.
+This field is used to preserve experiment provenance and to reconstruct the training support for
+the spatial raw-node-feature path.
+For `raw_temporal_mean` experiments, inference should not use a single mask for every model input:
+
+- temporal branch inputs should use the full-grid cached temporal features for the nodes being predicted
+- spatial raw node features should stay aligned with the training support and therefore use `train_flow_grid_ids` by default
+
+Masking both temporal and spatial inputs to the 2250 training-flow nodes causes a severe distribution
+shift and can collapse the full-grid class distribution. Expanding raw spatial node features to all
+65049 nodes also changes the GCN input distribution and can suppress classes such as Class 7.
+
+For `raw_temporal_mean` experiments, the cache should also carry provenance metadata such as
+`train_flow_label_hash` and `train_flow_total_samples`, so `predict_with_cache.py` can verify that
+the training-flow mask belongs to the same experiment rather than merely matching graph edge counts.
+
+If the cache was generated before this field was added, regenerate it with:
+
+```bash
+EXPERIMENT_DIR=outputs/your_experiment python extract_all_features.py
+```
+
+`extract_all_features.py` now resolves the matching training feature cache from the experiment
+manifest (`metrics/test_results.json`) using `label_file_hash` and `total_samples`, and refuses
+to guess when no experiment context is provided.
+
 Evaluation figures require:
 
 - `outputs/.../metrics/classification_report.txt`
@@ -75,4 +101,7 @@ All paths above are resolved through `visualize/viz_config.py`.
 
 - The one-click script prefers reusing `all_grids_predictions.csv` to avoid unnecessary inference.
 - If an older CSV lacks English columns, they are filled automatically during rendering.
+- `predict_with_cache.py` now fails fast for `raw_temporal_mean` experiments if the cache does not include `train_flow_grid_ids`.
+- `predict_with_cache.py` also rejects caches whose training-flow mask provenance does not match the current experiment's `label_file_hash` and sample count.
+- Current inference semantics for `raw_temporal_mean` are split by branch: temporal features come from the full-grid cache, while spatial raw node features default to the training-flow support. Use `STRICT_TRAIN_FLOW_MASK=1` only for explicit debugging, and `SPATIAL_RAW_MASK_MODE=all` only when intentionally testing distribution-shift behavior.
 - For publication updates, change the config first, then rerun the one-click script.
