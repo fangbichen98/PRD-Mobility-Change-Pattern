@@ -175,9 +175,16 @@ class EnhancedDualBranchModel(nn.Module):
         # Spatial branch: Choose model type
         spatial_model = "GINE" if spatial_model == "GIN" else spatial_model
 
+        # Resolve edge feature dimensionality for models that support multi-dim edge attrs
+        edge_feature_mode = getattr(config, 'EDGE_FEATURE_MODE', 'flow_only')
+        _edge_dim_map = {
+            'flow_only': 1,
+            'flow_distance_direction': 4,
+            'flow_distribution': 3,
+        }
+        resolved_edge_dim = _edge_dim_map.get(edge_feature_mode, 1)
+
         if spatial_model == "GINE":
-            gine_edge_feature_mode = getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
-            edge_dim = 4 if gine_edge_feature_mode == 'flow_distance_direction' else 1
             gine_input_size = config.LAPLACIAN_PE_DIM
             if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
                 gine_input_size += self.RAW_TEMPORAL_GRAPH_STATS_DIM
@@ -187,7 +194,7 @@ class EnhancedDualBranchModel(nn.Module):
                 num_layers=config.SPATIAL_LAYERS,
                 dropout=dropout,
                 output_size=hidden_size,
-                edge_dim=edge_dim
+                edge_dim=resolved_edge_dim
             )
             self.use_laplacian_pe = True
             self.laplacian_pe_2021 = None
@@ -199,7 +206,8 @@ class EnhancedDualBranchModel(nn.Module):
                 num_layers=config.SPATIAL_LAYERS,
                 dropout=dropout,
                 output_size=hidden_size,
-                heads=1
+                heads=1,
+                edge_dim=resolved_edge_dim
             )
             self.use_laplacian_pe = False
         elif spatial_model == "SAGE":

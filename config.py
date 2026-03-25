@@ -78,10 +78,12 @@ SPATIAL_MODEL = "GCN"        # Options: "GCN", "SAGE", "WGCN", "EVOLVEGCN", "GIN
 SPATIAL_LAYERS = 2           # Number of spatial layers
 SPATIAL_HIDDEN_SIZE = 128    # Spatial branch hidden units
 LAPLACIAN_PE_DIM = 16        # Laplacian Positional Encoding dimension (for GINE)
-# GINE edge feature mode:
+# Edge feature mode (for models supporting multi-dim edge attributes: GINE, GAT):
 # - "flow_only": scalar edge weight only (legacy behavior)
 # - "flow_distance_direction": 4-dim edge attr [flow, normalized_distance, cos(theta), sin(theta)]
-GINE_EDGE_FEATURE_MODE = "flow_only"
+# - "flow_distribution": 3-dim edge attr [flow, p_ij, info_ij] — aligned with entropy-based labels
+#   p_ij = flow(i→j) / total_outflow(i), info_ij = -log(p_ij)
+EDGE_FEATURE_MODE = "flow_only"
 # Spatial node feature mode for non-GINE branches:
 # - "ones": featureless all-1 node input (default)
 # - "temporal_mean": use per-node mean over 168x2 temporal sequence as node features

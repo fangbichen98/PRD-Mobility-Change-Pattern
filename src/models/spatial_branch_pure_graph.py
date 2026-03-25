@@ -623,7 +623,8 @@ class PureGraphDualYearGAT(nn.Module):
                  num_layers: int = 2,
                  dropout: float = 0.2,
                  output_size: int = 256,
-                 heads: int = 1):
+                 heads: int = 1,
+                 edge_dim: int = 1):
         super(PureGraphDualYearGAT, self).__init__()
 
         self.input_size = input_size
@@ -632,6 +633,7 @@ class PureGraphDualYearGAT(nn.Module):
         self.dropout_rate = dropout
         self.output_size = output_size
         self.heads = heads
+        self.edge_dim = edge_dim
 
         # Cache for storing computed graph embeddings
         self._cached_2021 = None
@@ -648,7 +650,7 @@ class PureGraphDualYearGAT(nn.Module):
                     heads=heads,
                     concat=False,
                     dropout=dropout,
-                    edge_dim=1,
+                    edge_dim=edge_dim,
                     add_self_loops=False
                 )
             )
@@ -666,8 +668,13 @@ class PureGraphDualYearGAT(nn.Module):
         if edge_index.dtype != torch.long:
             edge_index = edge_index.long()
 
-        # GAT consumes edge_attr as 2D edge features.
-        edge_features = torch.log1p(edge_attr.float()).unsqueeze(-1)
+        # GAT consumes edge_attr as 2D edge features (E, edge_dim).
+        edge_features = edge_attr.float()
+        if edge_features.dim() == 1:
+            edge_features = edge_features.unsqueeze(-1)  # (E,) -> (E, 1)
+        # Log-transform only the flow channel (column 0)
+        edge_features = edge_features.clone()
+        edge_features[:, 0] = torch.log1p(edge_features[:, 0].clamp(min=0.0))
 
         h = x
         for gat_layer in self.gat_layers:

@@ -186,10 +186,16 @@ LSTM_HIDDEN_SIZE = 256      # Not used (SimplifiedMultiScaleTemporal uses 128 hi
 LSTM_DROPOUT = 0.4          # Used by SimplifiedMultiScaleTemporal
 
 # Spatial Branch
-SPATIAL_MODEL = "GCN"       # Options: "GCN", "SAGE", "GINE"
+SPATIAL_MODEL = "GCN"       # Options: "GCN", "SAGE", "GINE", "GAT"
 SPATIAL_LAYERS = 3          # Number of GCN/SAGE/GINE layers
 SPATIAL_HIDDEN_SIZE = 128   # Hidden units per layer
 LAPLACIAN_PE_DIM = 16       # Laplacian PE dimension (for GINE only)
+
+# Edge Feature Mode (for GINE and GAT)
+EDGE_FEATURE_MODE = "flow_only"  # Options: "flow_only", "flow_distance_direction", "flow_distribution"
+# - flow_only: scalar edge weight (1-dim)
+# - flow_distance_direction: [flow, norm_dist, cos(θ), sin(θ)] (4-dim)
+# - flow_distribution: [flow, p_ij, info_ij] (3-dim) — aligned with entropy-based labels
 
 # Fusion
 FUSION_HIDDEN_SIZE = 256
@@ -311,7 +317,21 @@ for epoch in range(NUM_EPOCHS):
 - **Performance**: Not tested with current configuration
 - **Features**: Uses Laplacian Positional Encoding (16-dim)
 - **Pros**: Can incorporate structural features via Laplacian PE
+- **Edge Feature Modes**: Supports multi-dim edge features via `EDGE_FEATURE_MODE`
 - **Note**: More complex, requires PE computation
+
+### 4. PureGraphDualYearGAT (Experimental)
+- **Architecture**: GAT with attention-based message passing
+- **Edge Feature Modes**: Supports multi-dim edge features via `EDGE_FEATURE_MODE`
+- **Note**: Supports `edge_dim` parameter for multi-dimensional edge attributes
+
+### Edge Feature Modes (for GINE/GAT)
+- **flow_only** (1-dim): Scalar flow weight. Default, used by GCN/SAGE.
+- **flow_distance_direction** (4-dim): `[flow, norm_distance, cos(θ), sin(θ)]`. Geographic features.
+- **flow_distribution** (3-dim): `[flow, p_ij, info_ij]`. Distribution features aligned with entropy-based labels.
+  - `p_ij = flow(i→j) / total_outflow(i)`: flow share (probability in entropy calculation)
+  - `info_ij = -log(p_ij)`: information content (entropy component)
+  - Directly encodes each edge's role in the OD distribution, matching how labels distinguish aggregation vs diffusion
 
 ---
 

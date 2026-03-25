@@ -84,7 +84,7 @@ def parse_args():
                         default=None,
                         help='Spatial node feature mode for non-GINE branches')
     parser.add_argument('--gine-edge-feature-mode', type=str,
-                        choices=['flow_only', 'flow_distance_direction'],
+                        choices=['flow_only', 'flow_distance_direction', 'flow_distribution'],
                         default=None,
                         help='Edge feature mode for GINE: flow only or flow+distance+direction')
     parser.add_argument('--branch-ablation-mode', type=str, choices=['full', 'temporal_only', 'spatial_only'], default='full',
@@ -429,7 +429,7 @@ def main():
     if args.spatial_node_feature_mode is not None:
         config.SPATIAL_NODE_FEATURE_MODE = args.spatial_node_feature_mode
     if args.gine_edge_feature_mode is not None:
-        config.GINE_EDGE_FEATURE_MODE = args.gine_edge_feature_mode
+        config.EDGE_FEATURE_MODE = args.gine_edge_feature_mode
     if args.graph_temporal_mode is not None:
         config.GRAPH_TEMPORAL_MODE = args.graph_temporal_mode
     if args.temporal_layers is not None:
@@ -438,8 +438,8 @@ def main():
     graph_topk_out = config.GRAPH_TOPK_OUT
     graph_topk_in = config.GRAPH_TOPK_IN
     topk_enabled = (graph_topk_out is not None) or (graph_topk_in is not None)
-    active_gine_edge_feature_mode = (
-        config.GINE_EDGE_FEATURE_MODE if spatial_model == 'GINE' else 'flow_only'
+    active_edge_feature_mode = (
+        config.EDGE_FEATURE_MODE if spatial_model in ('GINE', 'GAT') else 'flow_only'
     )
 
     # Record start time
@@ -465,7 +465,7 @@ def main():
     logger.info(f"Graph temporal mode | mode={getattr(config, 'GRAPH_TEMPORAL_MODE', 'static')}")
     logger.info(f"Seed override | random_seed={config.RANDOM_SEED}")
     logger.info(f"Spatial node feature mode | mode={config.SPATIAL_NODE_FEATURE_MODE}")
-    logger.info(f"GINE edge feature mode | mode={active_gine_edge_feature_mode}")
+    logger.info(f"GINE edge feature mode | mode={active_edge_feature_mode}")
     logger.info(f"Split manifest | load={args.split_manifest}, export={args.export_split_manifest}")
     logger.info(f"Branch ablation mode | mode={args.branch_ablation_mode}")
     logger.info(f"Fusion ablation mode | mode={args.fusion_ablation_mode}")
@@ -500,7 +500,7 @@ def main():
         samples_per_class=samples_per_class,
         use_cache=use_cache,
         spatial_model=spatial_model,
-        edge_feature_mode=active_gine_edge_feature_mode
+        edge_feature_mode=active_edge_feature_mode
     )
 
     logger.info(f"✓ Data loaded successfully")
