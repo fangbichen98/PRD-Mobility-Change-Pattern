@@ -78,12 +78,18 @@ SPATIAL_MODEL = "GCN"        # Options: "GCN", "SAGE", "WGCN", "EVOLVEGCN", "GIN
 SPATIAL_LAYERS = 2           # Number of spatial layers
 SPATIAL_HIDDEN_SIZE = 128    # Spatial branch hidden units
 LAPLACIAN_PE_DIM = 16        # Laplacian Positional Encoding dimension (for GINE)
+# GINE edge feature mode:
+# - "flow_only": scalar edge weight only (legacy behavior)
+# - "flow_distance_direction": 4-dim edge attr [flow, normalized_distance, cos(theta), sin(theta)]
+GINE_EDGE_FEATURE_MODE = "flow_only"
 # Spatial node feature mode for non-GINE branches:
 # - "ones": featureless all-1 node input (default)
 # - "temporal_mean": use per-node mean over 168x2 temporal sequence as node features
 # - "annual_daily_mean": use per-node annual daily-average total flow (1-dim)
 # - "annual_daily_mean_2d": use per-node annual daily-average inflow/outflow (2-dim)
 # - "raw_temporal_mean": use per-node mean over raw 168x2 inflow/outflow (no log)
+# - "raw_temporal_graph_stats": use raw flow stats + graph structural stats as node features;
+#   for GINE this is concatenated with Laplacian PE
 SPATIAL_NODE_FEATURE_MODE = "raw_temporal_mean"
 # Note: GCN doesn't use attention heads (unlike GAT)
 # Legacy GAT_* parameters are kept for backward compatibility

@@ -8,7 +8,7 @@ import sys
 import argparse
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
@@ -41,12 +41,18 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Multi-Scale Temporal + Graph model")
     parser.add_argument('--label-path', type=str, default=None,
                         help='Override label file path')
+    parser.add_argument('--split-manifest', type=str, default=None,
+                        help='Load a fixed train/val/test split manifest JSON')
+    parser.add_argument('--export-split-manifest', type=str, default=None,
+                        help='Export the resolved train/val/test split manifest JSON')
     parser.add_argument('--samples-per-class', type=int, default=None,
                         help='Optional per-class sampling for small-scale experiments')
     parser.add_argument('--spatial-model', type=str, choices=['GCN', 'SAGE', 'WGCN', 'GINE', 'GIN', 'GAT', 'EVOLVEGCN'], default=None,
                         help='Override spatial branch model')
     parser.add_argument('--temporal-model', type=str, choices=['LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', 'BIGRU'], default=None,
                         help='Override temporal branch model')
+    parser.add_argument('--temporal-layers', type=int, default=None,
+                        help='Override temporal branch layer count for lightweight temporal models')
     parser.add_argument('--num-epochs', type=int, default=None,
                         help='Override max number of epochs')
     parser.add_argument('--early-stopping-patience', type=int, default=None,
@@ -74,14 +80,131 @@ def parse_args():
     parser.add_argument('--random-seed', type=int, default=None,
                         help='Override random seed for data sampling/splitting')
     parser.add_argument('--spatial-node-feature-mode', type=str,
-                        choices=['ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', 'raw_temporal_mean'],
+                        choices=['ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', 'raw_temporal_mean', 'raw_temporal_graph_stats'],
                         default=None,
                         help='Spatial node feature mode for non-GINE branches')
+    parser.add_argument('--gine-edge-feature-mode', type=str,
+                        choices=['flow_only', 'flow_distance_direction'],
+                        default=None,
+                        help='Edge feature mode for GINE: flow only or flow+distance+direction')
     parser.add_argument('--branch-ablation-mode', type=str, choices=['full', 'temporal_only', 'spatial_only'], default='full',
                         help='Ablate temporal/spatial branches while keeping the same training pipeline')
     parser.add_argument('--fusion-ablation-mode', type=str, choices=['gated', 'mean', 'concat'], default='gated',
                         help='Ablate fusion mechanism by replacing gated fusion with simple mean pooling or concat')
     return parser.parse_args()
+
+
+def write_split_manifest(manifest_path, manifest_payload):
+    """Write a split manifest JSON to disk."""
+    manifest_dir = os.path.dirname(manifest_path)
+    if manifest_dir:
+        os.makedirs(manifest_dir, exist_ok=True)
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest_payload, f, indent=2)
+
+
+def build_split_manifest_payload(label_path, random_seed, dataset_grid_ids, split_indices):
+    """Build a portable split manifest using grid IDs instead of dataset indices."""
+    return {
+        'label_path': label_path,
+        'random_seed': int(random_seed),
+        'num_samples': len(dataset_grid_ids),
+        'splits': {
+            split_name: [int(dataset_grid_ids[idx]) for idx in indices]
+            for split_name, indices in split_indices.items()
+        }
+    }
+
+
+def resolve_dataset_splits(dataset, label_path, split_manifest_path, export_manifest_paths, random_seed):
+    """Create or load deterministic dataset splits and optionally export the manifest."""
+    dataset_grid_ids = [int(grid_id) for grid_id in dataset.grid_ids]
+
+    if split_manifest_path:
+        with open(split_manifest_path, 'r') as f:
+            split_manifest = json.load(f)
+
+        split_grid_ids = split_manifest.get('splits', split_manifest)
+        required_splits = ('train', 'val', 'test')
+        missing_splits = [split_name for split_name in required_splits if split_name not in split_grid_ids]
+        if missing_splits:
+            raise ValueError(
+                f"Split manifest missing required keys: {missing_splits}"
+            )
+
+        grid_id_to_index = {grid_id: idx for idx, grid_id in enumerate(dataset_grid_ids)}
+        split_indices = {}
+        used_grid_ids = []
+
+        for split_name in required_splits:
+            indices = []
+            for grid_id in split_grid_ids[split_name]:
+                normalized_grid_id = int(grid_id)
+                if normalized_grid_id not in grid_id_to_index:
+                    raise ValueError(
+                        f"Grid ID {normalized_grid_id} in split '{split_name}' not found in current dataset"
+                    )
+                indices.append(grid_id_to_index[normalized_grid_id])
+                used_grid_ids.append(normalized_grid_id)
+            split_indices[split_name] = indices
+
+        if len(set(used_grid_ids)) != len(used_grid_ids):
+            raise ValueError("Split manifest contains duplicate grid IDs across train/val/test")
+
+        missing_grid_ids = sorted(set(dataset_grid_ids) - set(used_grid_ids))
+        if missing_grid_ids:
+            raise ValueError(
+                f"Split manifest does not cover all dataset samples; missing {len(missing_grid_ids)} grid IDs"
+            )
+
+        split_source = 'manifest'
+        source_manifest_path = split_manifest_path
+    else:
+        train_size = int(config.TRAIN_SPLIT * len(dataset))
+        val_size = int(config.VAL_SPLIT * len(dataset))
+        test_size = len(dataset) - train_size - val_size
+
+        shuffled_indices = torch.randperm(
+            len(dataset),
+            generator=torch.Generator().manual_seed(random_seed)
+        ).tolist()
+
+        split_indices = {
+            'train': shuffled_indices[:train_size],
+            'val': shuffled_indices[train_size:train_size + val_size],
+            'test': shuffled_indices[train_size + val_size:train_size + val_size + test_size],
+        }
+        split_source = 'seeded_random_split'
+        source_manifest_path = None
+
+    split_manifest_payload = build_split_manifest_payload(
+        label_path=label_path,
+        random_seed=random_seed,
+        dataset_grid_ids=dataset_grid_ids,
+        split_indices=split_indices
+    )
+
+    written_manifest_paths = []
+    for export_manifest_path in export_manifest_paths:
+        if export_manifest_path is None:
+            continue
+        write_split_manifest(export_manifest_path, split_manifest_payload)
+        written_manifest_paths.append(export_manifest_path)
+
+    split_subsets = {
+        split_name: Subset(dataset, indices)
+        for split_name, indices in split_indices.items()
+    }
+    split_counts = {split_name: len(indices) for split_name, indices in split_indices.items()}
+
+    split_metadata = {
+        'source': split_source,
+        'source_manifest_path': source_manifest_path,
+        'written_manifest_paths': written_manifest_paths,
+        'counts': split_counts,
+    }
+
+    return split_subsets, split_metadata
 
 
 def train_epoch(model, train_loader, criterion, optimizer, device, accumulation_steps=4, grad_clip_norm=1.0):
@@ -305,8 +428,19 @@ def main():
         config.RANDOM_SEED = args.random_seed
     if args.spatial_node_feature_mode is not None:
         config.SPATIAL_NODE_FEATURE_MODE = args.spatial_node_feature_mode
+    if args.gine_edge_feature_mode is not None:
+        config.GINE_EDGE_FEATURE_MODE = args.gine_edge_feature_mode
     if args.graph_temporal_mode is not None:
         config.GRAPH_TEMPORAL_MODE = args.graph_temporal_mode
+    if args.temporal_layers is not None:
+        config.LSTM_LAYERS = args.temporal_layers
+
+    graph_topk_out = config.GRAPH_TOPK_OUT
+    graph_topk_in = config.GRAPH_TOPK_IN
+    topk_enabled = (graph_topk_out is not None) or (graph_topk_in is not None)
+    active_gine_edge_feature_mode = (
+        config.GINE_EDGE_FEATURE_MODE if spatial_model == 'GINE' else 'flow_only'
+    )
 
     # Record start time
     start_time = time.time()
@@ -324,12 +458,15 @@ def main():
         f"grad_accum={gradient_accumulation}, early_stop={early_stopping_patience}, use_cache={use_cache}"
     )
     logger.info(f"Temporal override | temporal_model={temporal_model}")
+    logger.info(f"Temporal layer override | layers={config.LSTM_LAYERS}")
     logger.info(
-        f"Graph overrides | topk_out={config.GRAPH_TOPK_OUT}, topk_in={config.GRAPH_TOPK_IN}"
+        f"Graph overrides | topk_out={graph_topk_out}, topk_in={graph_topk_in}, topk_enabled={topk_enabled}"
     )
     logger.info(f"Graph temporal mode | mode={getattr(config, 'GRAPH_TEMPORAL_MODE', 'static')}")
     logger.info(f"Seed override | random_seed={config.RANDOM_SEED}")
     logger.info(f"Spatial node feature mode | mode={config.SPATIAL_NODE_FEATURE_MODE}")
+    logger.info(f"GINE edge feature mode | mode={active_gine_edge_feature_mode}")
+    logger.info(f"Split manifest | load={args.split_manifest}, export={args.export_split_manifest}")
     logger.info(f"Branch ablation mode | mode={args.branch_ablation_mode}")
     logger.info(f"Fusion ablation mode | mode={args.fusion_ablation_mode}")
 
@@ -351,6 +488,8 @@ def main():
     logger.info(f"\nOutput directory: {output_dir}")
     logger.info(f"Log file: {output_dir}/training.log")
 
+    output_split_manifest_path = f"{output_dir}/metrics/split_manifest.json"
+
     # Load data
     logger.info("\n" + "=" * 80)
     logger.info("Step 1: Loading data")
@@ -359,7 +498,9 @@ def main():
     data = prepare_dual_year_experiment_data(
         label_path=label_path,
         samples_per_class=samples_per_class,
-        use_cache=use_cache
+        use_cache=use_cache,
+        spatial_model=spatial_model,
+        edge_feature_mode=active_gine_edge_feature_mode
     )
 
     logger.info(f"✓ Data loaded successfully")
@@ -367,6 +508,7 @@ def main():
     logger.info(f"  - Feature shape: {list(data['change_features'].values())[0].shape}")
     logger.info(f"  - Graph 2021 edges: {data['graphs_2021'][0][0].shape[1]}")
     logger.info(f"  - Graph 2024 edges: {data['graphs_2024'][0][0].shape[1]}")
+    logger.info(f"  - Graph edge feature mode: {data.get('edge_feature_mode', 'flow_only')}")
 
     # Prepare temporal features
     logger.info("\n" + "=" * 80)
@@ -398,17 +540,27 @@ def main():
 
     logger.info(f"✓ Dataset created: {len(dataset)} samples")
 
-    # Split dataset
-    train_size = int(config.TRAIN_SPLIT * len(dataset))
-    val_size = int(config.VAL_SPLIT * len(dataset))
-    test_size = len(dataset) - train_size - val_size
+    split_export_paths = [output_split_manifest_path]
+    if args.export_split_manifest:
+        split_export_paths.append(args.export_split_manifest)
 
-    train_dataset, val_dataset, test_dataset = random_split(
-        dataset,
-        [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(config.RANDOM_SEED)
+    split_subsets, split_metadata = resolve_dataset_splits(
+        dataset=dataset,
+        label_path=label_path,
+        split_manifest_path=args.split_manifest,
+        export_manifest_paths=split_export_paths,
+        random_seed=config.RANDOM_SEED,
     )
 
+    train_dataset = split_subsets['train']
+    val_dataset = split_subsets['val']
+    test_dataset = split_subsets['test']
+
+    logger.info(f"  - Split Source: {split_metadata['source']}")
+    if split_metadata['source_manifest_path']:
+        logger.info(f"  - Loaded Split Manifest: {split_metadata['source_manifest_path']}")
+    for written_manifest_path in split_metadata['written_manifest_paths']:
+        logger.info(f"  - Wrote Split Manifest: {written_manifest_path}")
     logger.info(f"  - Train: {len(train_dataset)} samples")
     logger.info(f"  - Val: {len(val_dataset)} samples")
     logger.info(f"  - Test: {len(test_dataset)} samples")
@@ -636,13 +788,17 @@ def main():
         'data_config': {
             'flow_threshold': config.FLOW_THRESHOLD,
             'time_steps': config.TIME_STEPS,
-            'time_steps_description': f'{config.TIME_STEPS // 24} days × 24 hours'
+            'time_steps_description': f'{config.TIME_STEPS // 24} days × 24 hours',
+            'topk_enabled': bool(topk_enabled),
+            'graph_topk_out': int(graph_topk_out) if graph_topk_out is not None else None,
+            'graph_topk_in': int(graph_topk_in) if graph_topk_in is not None else None,
+            'graph_edge_feature_mode': data.get('edge_feature_mode', 'flow_only')
         },
         'model_architecture': {
             'temporal_branch': {
                 'type': f'Multi-scale (hourly + daily + weekly) + {temporal_model}',
                 'temporal_model': temporal_model,
-                'lstm_layers': config.LSTM_LAYERS,
+                'temporal_layers': config.LSTM_LAYERS,
                 'lstm_hidden_size': config.LSTM_HIDDEN_SIZE,
                 'lstm_dropout': config.LSTM_DROPOUT,
                 'temporal_input_size': config.TEMPORAL_INPUT_SIZE
@@ -653,7 +809,11 @@ def main():
                 'spatial_hidden_size': config.SPATIAL_HIDDEN_SIZE,
                 'node_feature_mode': config.SPATIAL_NODE_FEATURE_MODE,
                 'graph_temporal_mode': getattr(config, 'GRAPH_TEMPORAL_MODE', 'static'),
-                'laplacian_pe_dim': config.LAPLACIAN_PE_DIM if spatial_model == 'GINE' else None
+                'topk_enabled': bool(topk_enabled),
+                'graph_topk_out': int(graph_topk_out) if graph_topk_out is not None else None,
+                'graph_topk_in': int(graph_topk_in) if graph_topk_in is not None else None,
+                'laplacian_pe_dim': config.LAPLACIAN_PE_DIM if spatial_model == 'GINE' else None,
+                'edge_feature_mode': data.get('edge_feature_mode', 'flow_only')
             },
             'fusion': {
                 'type': {
@@ -683,6 +843,9 @@ def main():
             'val_split': config.VAL_SPLIT,
             'test_split': config.TEST_SPLIT,
             'random_seed': config.RANDOM_SEED,
+            'split_source': split_metadata['source'],
+            'split_manifest_loaded': split_metadata['source_manifest_path'],
+            'split_manifest_written': split_metadata['written_manifest_paths'],
             'dropout': config.LSTM_DROPOUT
         },
         'data_info': {
@@ -738,6 +901,10 @@ def main():
         f.write("-" * 80 + "\n")
         f.write(f"  Flow Threshold: {config.FLOW_THRESHOLD}\n")
         f.write(f"  Time Steps: {config.TIME_STEPS} ({config.TIME_STEPS // 24} days × 24 hours)\n")
+        f.write(f"  Top-k Enabled: {topk_enabled}\n")
+        f.write(f"  Graph Top-k Out: {graph_topk_out}\n")
+        f.write(f"  Graph Top-k In: {graph_topk_in}\n")
+        f.write(f"  Graph Edge Feature Mode: {data.get('edge_feature_mode', 'flow_only')}\n")
         f.write(f"  Graph 2021 Edges: {int(data['graphs_2021'][0][0].shape[1])}\n")
         f.write(f"  Graph 2024 Edges: {int(data['graphs_2024'][0][0].shape[1])}\n")
         f.write("\n")
@@ -747,7 +914,7 @@ def main():
         f.write(f"  Temporal Branch:\n")
         f.write(f"    - Type: Multi-scale (hourly + daily + weekly) + {temporal_model}\n")
         f.write(f"    - Temporal Model: {temporal_model}\n")
-        f.write(f"    - LSTM Layers: {config.LSTM_LAYERS}\n")
+        f.write(f"    - Temporal Layers: {config.LSTM_LAYERS}\n")
         f.write(f"    - LSTM Hidden Size: {config.LSTM_HIDDEN_SIZE}\n")
         f.write(f"    - LSTM Dropout: {config.LSTM_DROPOUT}\n")
         f.write(f"    - Temporal Input Size: {config.TEMPORAL_INPUT_SIZE}\n")
@@ -757,6 +924,10 @@ def main():
         f.write(f"    - SPATIAL Hidden Size: {config.SPATIAL_HIDDEN_SIZE}\n")
         f.write(f"    - Node Feature Mode: {config.SPATIAL_NODE_FEATURE_MODE}\n")
         f.write(f"    - Graph Temporal Mode: {getattr(config, 'GRAPH_TEMPORAL_MODE', 'static')}\n")
+        f.write(f"    - Top-k Enabled: {topk_enabled}\n")
+        f.write(f"    - Graph Top-k Out: {graph_topk_out}\n")
+        f.write(f"    - Graph Top-k In: {graph_topk_in}\n")
+        f.write(f"    - Edge Feature Mode: {data.get('edge_feature_mode', 'flow_only')}\n")
         if spatial_model == "GINE":
             f.write(f"    - Laplacian PE Dimension: {config.LAPLACIAN_PE_DIM}\n")
         fusion_type_name = {
@@ -786,6 +957,9 @@ def main():
         f.write(f"  Scheduler Factor: {scheduler_factor}\n")
         f.write(f"  Train/Val/Test Split: {config.TRAIN_SPLIT}/{config.VAL_SPLIT}/{config.TEST_SPLIT}\n")
         f.write(f"  Random Seed: {config.RANDOM_SEED}\n")
+        f.write(f"  Split Source: {split_metadata['source']}\n")
+        f.write(f"  Loaded Split Manifest: {split_metadata['source_manifest_path']}\n")
+        f.write(f"  Written Split Manifest(s): {', '.join(split_metadata['written_manifest_paths'])}\n")
         f.write(f"  Dropout: {config.LSTM_DROPOUT}\n")
         f.write("\n")
         f.write("=" * 80 + "\n\n")

@@ -441,7 +441,8 @@ def _build_daily_graph_sequence_from_static(
         edge_index: np.ndarray,
         edge_weights: np.ndarray,
         grid_id_to_idx: dict,
-        train_days: int) -> list:
+    train_days: int,
+    edge_attr_template: np.ndarray = None) -> list:
     """
     Build daily discrete graph snapshots using fixed topology and dynamic edge weights.
 
@@ -498,12 +499,49 @@ def _build_daily_graph_sequence_from_static(
         zero_self_loop_mask = self_loop_mask & (day_weights <= 0)
         day_weights[zero_self_loop_mask] = edge_weights[zero_self_loop_mask]
 
-        graphs.append((edge_index.copy(), day_weights))
+        if edge_attr_template is None or edge_attr_template.ndim == 1:
+            day_edge_attr = day_weights
+        else:
+            day_edge_attr = edge_attr_template.copy()
+            day_edge_attr[:, 0] = day_weights
+
+        graphs.append((edge_index.copy(), day_edge_attr))
 
     return graphs
 
 
-def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_cache=True, cache_dir='data/cache'):
+def _resolve_edge_feature_mode(spatial_model: str, edge_feature_mode: str = None) -> str:
+    """Resolve effective graph edge feature mode for the current experiment."""
+    spatial_model = (spatial_model or getattr(config, 'SPATIAL_MODEL', 'GCN')).upper()
+    configured_mode = edge_feature_mode or getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
+
+    if spatial_model != 'GINE':
+        return 'flow_only'
+
+    if configured_mode not in {'flow_only', 'flow_distance_direction'}:
+        raise ValueError(
+            f"Unsupported GINE edge feature mode: {configured_mode}. "
+            "Use 'flow_only' or 'flow_distance_direction'."
+        )
+
+    return configured_mode
+
+
+def _ensure_scalar_edge_weights(edge_weights: np.ndarray) -> np.ndarray:
+    """Normalize cached base edge weights to a 1-d flow vector."""
+    edge_weights = np.asarray(edge_weights)
+    if edge_weights.ndim == 1:
+        return edge_weights.astype(np.float32, copy=False)
+    return edge_weights[:, 0].astype(np.float32, copy=False)
+
+
+def prepare_dual_year_experiment_data(
+    label_path,
+    samples_per_class=None,
+    use_cache=True,
+    cache_dir='data/cache',
+    spatial_model=None,
+    edge_feature_mode=None):
     """
     Prepare complete dataset for dual-year experiment with caching support
     NEW: Includes dynamic graph snapshots for both years
@@ -574,9 +612,14 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     graph_base_cache_file = os.path.join(graph_cache_dir, f"dual_year_graph_base_{graph_base_hash}.pkl")
 
     graph_temporal_mode = getattr(config, 'GRAPH_TEMPORAL_MODE', 'static')
+    effective_spatial_model = (spatial_model or getattr(config, 'SPATIAL_MODEL', 'GCN')).upper()
+    if effective_spatial_model == 'GIN':
+        effective_spatial_model = 'GINE'
+    effective_edge_feature_mode = _resolve_edge_feature_mode(effective_spatial_model, edge_feature_mode)
     graph_variant_key = (
         f"base_{graph_base_hash}_topkout_{config.GRAPH_TOPK_OUT}_topkin_{config.GRAPH_TOPK_IN}_"
-        f"temporal_{graph_temporal_mode}_v3"
+        f"temporal_{graph_temporal_mode}_spatial_{effective_spatial_model}_"
+        f"edgefeat_{effective_edge_feature_mode}_v5"
     )
     graph_variant_hash = hashlib.md5(graph_variant_key.encode()).hexdigest()[:12]
     graph_variant_cache_file = os.path.join(graph_cache_dir, f"dual_year_graph_variant_{graph_variant_hash}.pkl")
@@ -721,6 +764,12 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
             try:
                 with open(graph_base_cache_file, 'rb') as f:
                     base_graph_data = pickle.load(f)
+                base_graph_data['edge_weights_2021_base'] = _ensure_scalar_edge_weights(
+                    base_graph_data['edge_weights_2021_base']
+                )
+                base_graph_data['edge_weights_2024_base'] = _ensure_scalar_edge_weights(
+                    base_graph_data['edge_weights_2024_base']
+                )
                 logger.info("✓ Graph base cache hit")
             except Exception as e:
                 logger.warning(f"Failed to load graph base cache: {e}")
@@ -797,6 +846,17 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
                 topk_in=config.GRAPH_TOPK_IN
             )
 
+        edge_attr_2021 = graph_builder.build_edge_attr(
+            edge_index_2021,
+            edge_weights_2021,
+            mode=effective_edge_feature_mode
+        )
+        edge_attr_2024 = graph_builder.build_edge_attr(
+            edge_index_2024,
+            edge_weights_2024,
+            mode=effective_edge_feature_mode
+        )
+
         if graph_temporal_mode == 'daily':
             logger.info("Building daily discrete graph snapshots (fixed topology + dynamic edge weights)")
 
@@ -821,18 +881,20 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
                 edge_index=edge_index_2021,
                 edge_weights=edge_weights_2021,
                 grid_id_to_idx=base_graph_data['grid_id_to_idx'],
-                train_days=config.TRAIN_DAYS
+                train_days=config.TRAIN_DAYS,
+                edge_attr_template=edge_attr_2021
             )
             graphs_2024 = _build_daily_graph_sequence_from_static(
                 od_df=od_2024_daily,
                 edge_index=edge_index_2024,
                 edge_weights=edge_weights_2024,
                 grid_id_to_idx=base_graph_data['grid_id_to_idx'],
-                train_days=config.TRAIN_DAYS
+                train_days=config.TRAIN_DAYS,
+                edge_attr_template=edge_attr_2024
             )
         else:
-            graphs_2021 = [(edge_index_2021, edge_weights_2021)]
-            graphs_2024 = [(edge_index_2024, edge_weights_2024)]
+            graphs_2021 = [(edge_index_2021, edge_attr_2021)]
+            graphs_2024 = [(edge_index_2024, edge_attr_2024)]
 
         graph_cache_data = {
             'graphs_2021': graphs_2021,
@@ -840,7 +902,8 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
             'edge_index': edge_index_2024,
             'edge_weights': edge_weights_2024,
             'grid_id_to_idx': base_graph_data['grid_id_to_idx'],
-            'graph_temporal_mode': graph_temporal_mode
+            'graph_temporal_mode': graph_temporal_mode,
+            'edge_feature_mode': effective_edge_feature_mode
         }
 
         if use_cache:
@@ -863,6 +926,7 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
     logger.info(f"  - Labeled nodes for training: {len(labels)}")
     logger.info(f"  - Unlabeled nodes in graph: {len(grid_id_to_idx) - len(labels)}")
     logger.info(f"  - Graph temporal mode: {graph_temporal_mode}")
+    logger.info(f"  - Graph edge feature mode: {graph_cache_data.get('edge_feature_mode', 'flow_only')}")
     logger.info(f"  - Graph snapshots per year: {len(graphs_2021)}")
     logger.info(f"  - Graph 2021 edges (snapshot0): {graphs_2021[0][0].shape[1]}")
     logger.info(f"  - Graph 2024 edges (snapshot0): {graphs_2024[0][0].shape[1]}")
@@ -882,6 +946,7 @@ def prepare_dual_year_experiment_data(label_path, samples_per_class=None, use_ca
         'edge_weights': edge_weights,
         'graphs_2021': graphs_2021,  # NEW: Dynamic graphs for 2021
         'graphs_2024': graphs_2024,  # NEW: Dynamic graphs for 2024
+        'edge_feature_mode': graph_cache_data.get('edge_feature_mode', 'flow_only'),
         'grid_id_to_idx': grid_id_to_idx,
         'norm_params_2021': feature_data['norm_params_2021'],
         'norm_params_2024': feature_data['norm_params_2024'],

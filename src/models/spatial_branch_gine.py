@@ -152,9 +152,11 @@ class PureGraphDualYearGINE(nn.Module):
         Returns:
             h_out: Node embeddings (num_nodes, output_size)
         """
-        # Normalize edge features to (E, edge_dim) then log-transform for stability.
-        edge_weights = self._normalize_edge_attr(edge_attr, edge_index)
-        edge_weights = torch.log1p(edge_weights)
+        # Normalize edge features to (E, edge_dim). Only flow is log-transformed;
+        # geometric features remain in their original normalized ranges.
+        edge_features = self._normalize_edge_attr(edge_attr, edge_index)
+        edge_features = edge_features.clone()
+        edge_features[:, 0] = torch.log1p(torch.clamp(edge_features[:, 0], min=0.0))
 
         # Ensure edge_index is int64
         if edge_index.dtype != torch.long:
@@ -164,7 +166,7 @@ class PureGraphDualYearGINE(nn.Module):
 
         # Apply GINE layers with batch normalization
         for i, (gine_layer, bn) in enumerate(zip(self.gine_layers, self.batch_norms)):
-            h = gine_layer(h, edge_index, edge_attr=edge_weights)
+            h = gine_layer(h, edge_index, edge_attr=edge_features)
             h = bn(h)
             h = self.act(h)
             h = self.dropout(h)

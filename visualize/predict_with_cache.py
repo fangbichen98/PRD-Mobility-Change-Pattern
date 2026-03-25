@@ -141,7 +141,7 @@ def use_train_flow_mask_for_spatial_raw(manifest: dict = None) -> bool:
         return True
 
     node_mode = infer_node_mode_from_manifest(manifest) if manifest else None
-    return node_mode == 'raw_temporal_mean'
+    return node_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'}
 
 
 def load_experiment_manifest(experiment_dir: Path):
@@ -240,11 +240,11 @@ def validate_inference_consistency(cached_data: dict, manifest: dict, cache_path
             f"SPATIAL_NODE_FEATURE_MODE expected {trained_node_mode} but current config is {runtime_node_mode}"
         )
 
-    if trained_node_mode == 'raw_temporal_mean' and 'train_flow_grid_ids' not in cached_data:
+    if trained_node_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'} and 'train_flow_grid_ids' not in cached_data:
         mismatches.append(
             "cache missing explicit train_flow_grid_ids required to reproduce training-time raw-flow masking"
         )
-    if trained_node_mode == 'raw_temporal_mean' and not cache_matches_train_flow_manifest(cached_data, manifest):
+    if trained_node_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'} and not cache_matches_train_flow_manifest(cached_data, manifest):
         expected_total = expected.get('total_samples')
         expected_hash = expected.get('label_file_hash')
         actual_total = len(cached_data.get('train_flow_grid_ids', []))
@@ -275,7 +275,7 @@ def resolve_cache_path_from_manifest(default_cache_path: str, manifest: dict) ->
     expected_e2021 = expected.get('graph_2021_edges')
     expected_e2024 = expected.get('graph_2024_edges')
     trained_node_mode = infer_node_mode_from_manifest(manifest)
-    require_train_flow_match = trained_node_mode == 'raw_temporal_mean'
+    require_train_flow_match = trained_node_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'}
     if expected_e2021 is None or expected_e2024 is None:
         return default_cache_path
 
@@ -495,6 +495,179 @@ def predict_grids_with_features(model, cached_data, device, batch_size=64):
 
     print(f"✓ Predicted {len(all_predictions)} grids")
     return np.array(all_predictions), grid_ids
+
+# ---------------------------------------------------------------------------
+# Node filtering thresholds — adjust these to tune which grids are shown
+# ---------------------------------------------------------------------------
+# Condition 1 (hard, always on): both years have zero total flow → exclude.
+#   These nodes carry no information whatsoever.
+#
+# Condition 2 (soft, default OFF): either year has zero total flow → exclude.
+#   WARNING: turning this ON will remove semantically valid classes:
+#     - Class 6 (Growth Diffusion): 2021 flow=0, 2024 flow>0  (new activity)
+#     - Class 8 (Decline Aggregation): 2021 flow>0, 2024 flow=0 (vanished activity)
+#     - Class 1 (Stable Static): many labeled nodes have zero flow in both years
+#   Set to True only if you want a conservative "both years active" subset.
+FILTER_EITHER_ZERO = False            # condition-2 switch
+
+# Condition 3 (soft): minimum total flow required for EACH year that has flow.
+#   Applied only to years with non-zero flow (so Class 6/8 one-sided flow is
+#   evaluated against the year that actually has flow).  Set to 0 to disable.
+FILTER_MIN_FLOW_PER_YEAR = 0          # type-3 threshold (total flow > this)
+
+# Condition 4 (soft): minimum non-zero hours required for EACH year that has
+#   flow.  Set to 0 to disable.
+FILTER_MIN_ACTIVE_HOURS_PER_YEAR = 1  # type-4 threshold
+
+# Condition 5 (optional, currently disabled): exclude grids that are
+#   unidirectional (only inflow OR only outflow in both years).
+#   Set to True to enable.
+FILTER_UNIDIRECTIONAL = False
+
+# Condition 6 (optional, currently disabled): exclude grids whose
+#   year-over-year total-flow ratio is more extreme than this factor.
+#   e.g. 50 means exclude if flow_2024/flow_2021 > 50 or < 1/50.
+#   Only meaningful when FILTER_EITHER_ZERO=False (both years have flow).
+#   Set to None to disable.
+FILTER_MAX_FLOW_RATIO = None          # e.g. 50.0 to enable
+
+
+def filter_grids_by_flow(predictions, grid_ids, cached_data):
+    """
+    Filter out grids whose flow data makes their predicted label unreliable.
+
+    Hard exclusion (always applied):
+      1. Both years have zero total flow — no signal at all.
+
+    Soft exclusions (controlled by module-level flags/thresholds above):
+      2. Either year has zero total flow (FILTER_EITHER_ZERO).
+         OFF by default: Class 6 (Growth Diffusion, 2021=0→2024>0) and
+         Class 8 (Decline Aggregation, 2021>0→2024=0) are semantically valid
+         one-sided-flow classes and must NOT be excluded here.
+      3. Either active year's total flow <= FILTER_MIN_FLOW_PER_YEAR.
+      4. Either active year has fewer than FILTER_MIN_ACTIVE_HOURS_PER_YEAR
+         non-zero hours.
+
+    Optional exclusions (disabled by default):
+      5. Unidirectional nodes (FILTER_UNIDIRECTIONAL).
+      6. Extreme year-over-year flow ratio (FILTER_MAX_FLOW_RATIO).
+
+    Parameters
+    ----------
+    predictions : np.ndarray  shape (N,)
+    grid_ids    : list[int]   length N
+    cached_data : dict        must contain 'change_features'
+
+    Returns
+    -------
+    filtered_predictions : np.ndarray
+    filtered_grid_ids    : list[int]
+    filter_stats         : dict  — counts for each exclusion reason
+    """
+    change_features = cached_data['change_features']
+
+    keep_mask = np.ones(len(grid_ids), dtype=bool)
+    stats = {
+        'total_input': len(grid_ids),
+        'excluded_both_zero': 0,
+        'excluded_either_zero': 0,
+        'excluded_low_flow': 0,
+        'excluded_low_active_hours': 0,
+        'excluded_unidirectional': 0,
+        'excluded_extreme_ratio': 0,
+    }
+
+    for i, grid_id in enumerate(grid_ids):
+        if not keep_mask[i]:
+            continue
+
+        feat = change_features[grid_id]          # (168, 4)
+        # feat columns: [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]
+        # Recover approximate raw flow from log features: exp(x) - 1
+        flow_2021 = np.expm1(feat[:, :2])        # (168, 2)  inflow+outflow 2021
+        flow_2024 = np.expm1(feat[:, 2:])        # (168, 2)  inflow+outflow 2024
+
+        total_2021 = flow_2021.sum()
+        total_2024 = flow_2024.sum()
+
+        # --- Condition 1 (hard): both years zero → no signal at all ---
+        if total_2021 == 0 and total_2024 == 0:
+            keep_mask[i] = False
+            stats['excluded_both_zero'] += 1
+            continue
+
+        # --- Condition 2 (soft, default OFF): either year zero ---
+        # Disabled by default because Class 6 (Growth Diffusion) has 2021=0
+        # and Class 8 (Decline Aggregation) has 2024=0 by definition.
+        if FILTER_EITHER_ZERO and (total_2021 == 0 or total_2024 == 0):
+            keep_mask[i] = False
+            stats['excluded_either_zero'] += 1
+            continue
+
+        # For conditions 3 & 4, evaluate only the year(s) that have flow.
+        # If a year is zero, skip its check (it's a valid one-sided pattern).
+        active_totals = [t for t in (total_2021, total_2024) if t > 0]
+        active_flows  = [f for f, t in zip((flow_2021, flow_2024),
+                                            (total_2021, total_2024)) if t > 0]
+
+        # --- Condition 3 (soft): minimum total flow for active years ---
+        if FILTER_MIN_FLOW_PER_YEAR > 0:
+            if any(t <= FILTER_MIN_FLOW_PER_YEAR for t in active_totals):
+                keep_mask[i] = False
+                stats['excluded_low_flow'] += 1
+                continue
+
+        # --- Condition 4 (soft): minimum active hours for active years ---
+        if FILTER_MIN_ACTIVE_HOURS_PER_YEAR > 0:
+            for f in active_flows:
+                if (f.sum(axis=1) > 0).sum() < FILTER_MIN_ACTIVE_HOURS_PER_YEAR:
+                    keep_mask[i] = False
+                    stats['excluded_low_active_hours'] += 1
+                    break
+            if not keep_mask[i]:
+                continue
+
+        # --- Condition 5 (optional): unidirectional nodes ---
+        if FILTER_UNIDIRECTIONAL:
+            inflow_2021  = flow_2021[:, 0].sum()
+            outflow_2021 = flow_2021[:, 1].sum()
+            inflow_2024  = flow_2024[:, 0].sum()
+            outflow_2024 = flow_2024[:, 1].sum()
+            uni_2021 = (inflow_2021 == 0) or (outflow_2021 == 0)
+            uni_2024 = (inflow_2024 == 0) or (outflow_2024 == 0)
+            if uni_2021 and uni_2024:
+                keep_mask[i] = False
+                stats['excluded_unidirectional'] += 1
+                continue
+
+        # --- Condition 6 (optional): extreme year-over-year ratio ---
+        # Only meaningful when both years have flow.
+        if FILTER_MAX_FLOW_RATIO is not None and total_2021 > 0 and total_2024 > 0:
+            ratio = total_2024 / total_2021
+            if ratio > FILTER_MAX_FLOW_RATIO or ratio < 1.0 / FILTER_MAX_FLOW_RATIO:
+                keep_mask[i] = False
+                stats['excluded_extreme_ratio'] += 1
+                continue
+
+    filtered_predictions = predictions[keep_mask]
+    filtered_grid_ids = [gid for gid, k in zip(grid_ids, keep_mask) if k]
+    stats['kept'] = int(keep_mask.sum())
+    stats['excluded_total'] = stats['total_input'] - stats['kept']
+
+    print(f"\n[Node Filter] Results:")
+    print(f"  Input grids              : {stats['total_input']}")
+    print(f"  Excluded (both zero)     : {stats['excluded_both_zero']}")
+    print(f"  Excluded (one zero, cond2={FILTER_EITHER_ZERO}): {stats['excluded_either_zero']}")
+    print(f"  Excluded (low flow ≤{FILTER_MIN_FLOW_PER_YEAR})    : {stats['excluded_low_flow']}")
+    print(f"  Excluded (active hrs <{FILTER_MIN_ACTIVE_HOURS_PER_YEAR})  : {stats['excluded_low_active_hours']}")
+    if FILTER_UNIDIRECTIONAL:
+        print(f"  Excluded (unidirectional): {stats['excluded_unidirectional']}")
+    if FILTER_MAX_FLOW_RATIO is not None:
+        print(f"  Excluded (ratio >{FILTER_MAX_FLOW_RATIO}x)  : {stats['excluded_extreme_ratio']}")
+    print(f"  Kept grids               : {stats['kept']} ({stats['kept']/stats['total_input']*100:.1f}%)")
+
+    return filtered_predictions, filtered_grid_ids, stats
+
 
 def create_full_prediction_dataframe(predictions, grid_ids, grid_metadata_path):
     """Create dataframe with predictions and coordinates"""
@@ -886,6 +1059,9 @@ def main():
 
     # Predict
     predictions, grid_ids = predict_grids_with_features(model, cached_data, device, batch_size=64)
+
+    # Filter out grids with unreliable flow data
+    predictions, grid_ids, filter_stats = filter_grids_by_flow(predictions, grid_ids, cached_data)
 
     # Create dataframe
     pred_df = create_full_prediction_dataframe(predictions, grid_ids, grid_metadata_path)

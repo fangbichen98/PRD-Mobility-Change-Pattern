@@ -45,6 +45,8 @@ class EnhancedDualBranchModel(nn.Module):
         Classifier: Single 9-class classification head
     """
 
+    RAW_TEMPORAL_GRAPH_STATS_DIM = 10
+
     def __init__(self,
                  temporal_input_size: int = 2,
                  hidden_size: int = 256,
@@ -94,11 +96,13 @@ class EnhancedDualBranchModel(nn.Module):
             )
 
         if self.spatial_node_feature_mode not in {
-            'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', 'raw_temporal_mean'
+            'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d',
+            'raw_temporal_mean', 'raw_temporal_graph_stats'
         }:
             raise ValueError(
                 f"Unsupported SPATIAL_NODE_FEATURE_MODE={self.spatial_node_feature_mode}. "
-                "Use 'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', or 'raw_temporal_mean'."
+                "Use 'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', "
+                "'raw_temporal_mean', or 'raw_temporal_graph_stats'."
             )
 
         if self.temporal_model not in {'LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', 'BIGRU'}:
@@ -107,7 +111,9 @@ class EnhancedDualBranchModel(nn.Module):
                 "Use 'LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', or 'BIGRU'."
             )
 
-        if self.spatial_node_feature_mode in {'temporal_mean', 'annual_daily_mean_2d', 'raw_temporal_mean'}:
+        if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
+            spatial_input_size = self.RAW_TEMPORAL_GRAPH_STATS_DIM
+        elif self.spatial_node_feature_mode in {'temporal_mean', 'annual_daily_mean_2d', 'raw_temporal_mean'}:
             spatial_input_size = temporal_input_size
         else:
             # ones / annual_daily_mean both feed 1-dim node feature to spatial branch.
@@ -170,12 +176,18 @@ class EnhancedDualBranchModel(nn.Module):
         spatial_model = "GINE" if spatial_model == "GIN" else spatial_model
 
         if spatial_model == "GINE":
+            gine_edge_feature_mode = getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
+            edge_dim = 4 if gine_edge_feature_mode == 'flow_distance_direction' else 1
+            gine_input_size = config.LAPLACIAN_PE_DIM
+            if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
+                gine_input_size += self.RAW_TEMPORAL_GRAPH_STATS_DIM
             self.spatial_branch = PureGraphDualYearGINE(
-                input_size=config.LAPLACIAN_PE_DIM,
+                input_size=gine_input_size,
                 hidden_size=config.SPATIAL_HIDDEN_SIZE,
                 num_layers=config.SPATIAL_LAYERS,
                 dropout=dropout,
-                output_size=hidden_size
+                output_size=hidden_size,
+                edge_dim=edge_dim
             )
             self.use_laplacian_pe = True
             self.laplacian_pe_2021 = None
@@ -244,6 +256,116 @@ class EnhancedDualBranchModel(nn.Module):
             nn.Linear(hidden_size // 2, num_classes)
         )
 
+    @staticmethod
+    def _mode_requires_raw_temporal(node_feature_mode: str) -> bool:
+        return node_feature_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'}
+
+    @staticmethod
+    def _zscore_node_features(node_features: torch.Tensor) -> torch.Tensor:
+        feature_mean = node_features.mean(dim=0, keepdim=True)
+        feature_std = node_features.std(dim=0, keepdim=True, unbiased=False).clamp_min(1e-6)
+        normalized = (node_features - feature_mean) / feature_std
+        return torch.nan_to_num(normalized, nan=0.0, posinf=0.0, neginf=0.0)
+
+    @staticmethod
+    def _extract_primary_edge_weight(edge_attr: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        num_edges = edge_index.size(1)
+
+        if edge_attr is None:
+            return torch.ones(num_edges, device=edge_index.device, dtype=torch.float32)
+
+        edge_attr = edge_attr.float()
+        if edge_attr.dim() == 1:
+            return edge_attr
+        if edge_attr.dim() == 2:
+            if edge_attr.size(0) == num_edges:
+                return edge_attr[:, 0]
+            if edge_attr.size(1) == num_edges:
+                return edge_attr[0]
+
+        return edge_attr.reshape(num_edges, -1)[:, 0]
+
+    def _compute_raw_temporal_graph_stats(self, raw_x: torch.Tensor, graph, num_nodes: int) -> torch.Tensor:
+        if raw_x is None:
+            raise ValueError("raw_temporal_graph_stats requires raw_x_2021/raw_x_2024 tensors")
+
+        hourly_mean = torch.log1p(raw_x.mean(dim=1))
+        hourly_peak = torch.log1p(raw_x.max(dim=1).values)
+        coeff_var = raw_x.std(dim=1, unbiased=False) / raw_x.mean(dim=1).clamp_min(1.0)
+
+        edge_index, edge_attr = graph[0]
+        edge_index = edge_index.long()
+        edge_weight = self._extract_primary_edge_weight(edge_attr, edge_index)
+
+        src = edge_index[0]
+        dst = edge_index[1]
+
+        out_degree = torch.bincount(src, minlength=num_nodes).float()
+        in_degree = torch.bincount(dst, minlength=num_nodes).float()
+
+        weighted_out = torch.zeros(num_nodes, device=edge_weight.device, dtype=torch.float32)
+        weighted_in = torch.zeros(num_nodes, device=edge_weight.device, dtype=torch.float32)
+        weighted_out.scatter_add_(0, src, edge_weight)
+        weighted_in.scatter_add_(0, dst, edge_weight)
+
+        avg_out_weight = weighted_out / out_degree.clamp_min(1.0)
+        avg_in_weight = weighted_in / in_degree.clamp_min(1.0)
+
+        graph_stats = torch.stack(
+            [
+                torch.log1p(out_degree),
+                torch.log1p(in_degree),
+                torch.log1p(avg_out_weight),
+                torch.log1p(avg_in_weight),
+            ],
+            dim=1,
+        )
+
+        node_features = torch.cat([hourly_mean, hourly_peak, coeff_var, graph_stats], dim=1)
+        return self._zscore_node_features(node_features)
+
+    def _build_non_gine_node_features(self, x_2021, x_2024, raw_x_2021, raw_x_2024, graphs_2021, graphs_2024, num_nodes):
+        spatial_node_features_2021 = None
+        spatial_node_features_2024 = None
+
+        if self.spatial_node_feature_mode == 'temporal_mean':
+            spatial_node_features_2021 = x_2021.mean(dim=1)
+            spatial_node_features_2024 = x_2024.mean(dim=1)
+        elif self.spatial_node_feature_mode == 'annual_daily_mean':
+            daily_total_2021 = x_2021.sum(dim=2).view(x_2021.shape[0], 7, 24).sum(dim=2)
+            daily_total_2024 = x_2024.sum(dim=2).view(x_2024.shape[0], 7, 24).sum(dim=2)
+            spatial_node_features_2021 = daily_total_2021.mean(dim=1, keepdim=True)
+            spatial_node_features_2024 = daily_total_2024.mean(dim=1, keepdim=True)
+        elif self.spatial_node_feature_mode == 'annual_daily_mean_2d':
+            daily_inout_2021 = x_2021.view(x_2021.shape[0], 7, 24, x_2021.shape[2]).sum(dim=2)
+            daily_inout_2024 = x_2024.view(x_2024.shape[0], 7, 24, x_2024.shape[2]).sum(dim=2)
+            spatial_node_features_2021 = daily_inout_2021.mean(dim=1)
+            spatial_node_features_2024 = daily_inout_2024.mean(dim=1)
+        elif self.spatial_node_feature_mode == 'raw_temporal_mean':
+            if raw_x_2021 is None or raw_x_2024 is None:
+                raise ValueError("raw_temporal_mean requires raw_x_2021/raw_x_2024 tensors")
+            spatial_node_features_2021 = raw_x_2021.mean(dim=1)
+            spatial_node_features_2024 = raw_x_2024.mean(dim=1)
+        elif self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
+            spatial_node_features_2021 = self._compute_raw_temporal_graph_stats(raw_x_2021, graphs_2021, num_nodes)
+            spatial_node_features_2024 = self._compute_raw_temporal_graph_stats(raw_x_2024, graphs_2024, num_nodes)
+
+        return spatial_node_features_2021, spatial_node_features_2024
+
+    def _build_gine_node_features(self, graphs_2021, graphs_2024, num_nodes, raw_x_2021, raw_x_2024, device):
+        self.compute_laplacian_pe_if_needed(graphs_2021, graphs_2024, num_nodes, device)
+
+        if self.spatial_node_feature_mode != 'raw_temporal_graph_stats':
+            return self.laplacian_pe_2021, self.laplacian_pe_2024
+
+        raw_graph_stats_2021 = self._compute_raw_temporal_graph_stats(raw_x_2021, graphs_2021, num_nodes)
+        raw_graph_stats_2024 = self._compute_raw_temporal_graph_stats(raw_x_2024, graphs_2024, num_nodes)
+
+        return (
+            torch.cat([self.laplacian_pe_2021, raw_graph_stats_2021], dim=1),
+            torch.cat([self.laplacian_pe_2024, raw_graph_stats_2024], dim=1),
+        )
+
     def compute_laplacian_pe_if_needed(self, graphs_2021, graphs_2024, num_nodes, device):
         """Compute Laplacian PE for GINE model if not already computed"""
         if self.use_laplacian_pe and self.laplacian_pe_2021 is None:
@@ -303,51 +425,45 @@ class EnhancedDualBranchModel(nn.Module):
         if self.branch_ablation_mode == 'spatial_only':
             temporal_features = torch.zeros_like(temporal_features)
 
+        if self._mode_requires_raw_temporal(self.spatial_node_feature_mode):
+            if raw_x_2021 is None or raw_x_2024 is None:
+                raise ValueError(
+                    f"{self.spatial_node_feature_mode} requires raw_x_2021/raw_x_2024 tensors"
+                )
+
         # Extract spatial features
         if self.branch_ablation_mode == 'temporal_only':
             spatial_features = torch.zeros_like(temporal_features)
         elif self.use_laplacian_pe:
-            # Compute Laplacian PE if needed
-            self.compute_laplacian_pe_if_needed(graphs_2021, graphs_2024, num_nodes, x_2021.device)
+            node_features_2021, node_features_2024 = self._build_gine_node_features(
+                graphs_2021=graphs_2021,
+                graphs_2024=graphs_2024,
+                num_nodes=num_nodes,
+                raw_x_2021=raw_x_2021,
+                raw_x_2024=raw_x_2024,
+                device=x_2021.device,
+            )
 
-            # GINE forward with Laplacian PE
             spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
                 graphs_2021=graphs_2021,
                 graphs_2024=graphs_2024,
-                node_features_2021=self.laplacian_pe_2021,
-                node_features_2024=self.laplacian_pe_2024,
+                node_features_2021=node_features_2021,
+                node_features_2024=node_features_2024,
                 node_indices=node_indices
             )
 
             # Stack spatial features: (batch_size, 3, hidden_size)
             spatial_features = torch.stack([spatial_2021, spatial_2024, spatial_diff], dim=1)
         else:
-            # GCN/SAGE forward (featureless)
-            spatial_node_features_2021 = None
-            spatial_node_features_2024 = None
-            if self.spatial_node_feature_mode == 'temporal_mean':
-                # Direction3: derive node features from raw temporal signals (no handcrafted externals).
-                spatial_node_features_2021 = x_2021.mean(dim=1)  # (num_nodes, temporal_input_size)
-                spatial_node_features_2024 = x_2024.mean(dim=1)  # (num_nodes, temporal_input_size)
-            elif self.spatial_node_feature_mode == 'annual_daily_mean':
-                # Annual daily average total flow per node/year (1-dim):
-                # sum over inflow+outflow per hour -> daily totals (7 values) -> daily mean.
-                daily_total_2021 = x_2021.sum(dim=2).view(x_2021.shape[0], 7, 24).sum(dim=2)
-                daily_total_2024 = x_2024.sum(dim=2).view(x_2024.shape[0], 7, 24).sum(dim=2)
-                spatial_node_features_2021 = daily_total_2021.mean(dim=1, keepdim=True)
-                spatial_node_features_2024 = daily_total_2024.mean(dim=1, keepdim=True)
-            elif self.spatial_node_feature_mode == 'annual_daily_mean_2d':
-                # Annual daily average per channel (2-dim): [daily_mean_inflow, daily_mean_outflow].
-                daily_inout_2021 = x_2021.view(x_2021.shape[0], 7, 24, x_2021.shape[2]).sum(dim=2)
-                daily_inout_2024 = x_2024.view(x_2024.shape[0], 7, 24, x_2024.shape[2]).sum(dim=2)
-                spatial_node_features_2021 = daily_inout_2021.mean(dim=1)
-                spatial_node_features_2024 = daily_inout_2024.mean(dim=1)
-            elif self.spatial_node_feature_mode == 'raw_temporal_mean':
-                if raw_x_2021 is None or raw_x_2024 is None:
-                    raise ValueError("raw_temporal_mean requires raw_x_2021/raw_x_2024 tensors")
-                # Use raw inflow/outflow means as spatial node features (no log transform).
-                spatial_node_features_2021 = raw_x_2021.mean(dim=1)
-                spatial_node_features_2024 = raw_x_2024.mean(dim=1)
+            spatial_node_features_2021, spatial_node_features_2024 = self._build_non_gine_node_features(
+                x_2021=x_2021,
+                x_2024=x_2024,
+                raw_x_2021=raw_x_2021,
+                raw_x_2024=raw_x_2024,
+                graphs_2021=graphs_2021,
+                graphs_2024=graphs_2024,
+                num_nodes=num_nodes,
+            )
 
             spatial_2021, spatial_2024, spatial_diff = self.spatial_branch(
                 graphs_2021=graphs_2021,

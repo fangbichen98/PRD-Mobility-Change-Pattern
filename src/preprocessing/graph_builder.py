@@ -27,6 +27,84 @@ class SpatialGraphBuilder:
         self.k_neighbors = k_neighbors
         self.grid_id_to_idx = {gid: idx for idx, gid in enumerate(metadata_df['grid_id'])}
         self.idx_to_grid_id = {idx: gid for gid, idx in self.grid_id_to_idx.items()}
+        self.coord_by_grid_id = {
+            gid: (float(lon), float(lat))
+            for gid, lon, lat in metadata_df[['grid_id', 'lon', 'lat']].itertuples(index=False, name=None)
+        }
+        self.node_coords = None
+        self._refresh_node_coords()
+
+    def _refresh_node_coords(self):
+        """Refresh node coordinates to align with the current node index mapping."""
+        self.node_coords = np.zeros((len(self.grid_id_to_idx), 2), dtype=np.float32)
+        for idx, grid_id in self.idx_to_grid_id.items():
+            lon, lat = self.coord_by_grid_id[grid_id]
+            self.node_coords[idx] = (lon, lat)
+
+    @staticmethod
+    def _haversine_distance_km(src_coords: np.ndarray, dst_coords: np.ndarray) -> np.ndarray:
+        """Compute great-circle distance in kilometers for batched lon/lat coordinates."""
+        if src_coords.shape[0] == 0:
+            return np.zeros(0, dtype=np.float32)
+
+        lon1 = np.radians(src_coords[:, 0])
+        lat1 = np.radians(src_coords[:, 1])
+        lon2 = np.radians(dst_coords[:, 0])
+        lat2 = np.radians(dst_coords[:, 1])
+
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
+        c = 2.0 * np.arctan2(np.sqrt(a), np.sqrt(np.maximum(1.0 - a, 0.0)))
+        return (6371.0 * c).astype(np.float32)
+
+    def build_edge_attr(
+        self,
+        edge_index: np.ndarray,
+        edge_weights: np.ndarray,
+        mode: str = 'flow_only'
+    ) -> np.ndarray:
+        """Build edge attributes from scalar weights and grid geometry."""
+        edge_weights = edge_weights.astype(np.float32, copy=False)
+
+        if mode == 'flow_only':
+            return edge_weights
+
+        if mode != 'flow_distance_direction':
+            raise ValueError(f"Unsupported edge feature mode: {mode}")
+
+        num_edges = edge_index.shape[1]
+        if num_edges == 0:
+            return np.zeros((0, 4), dtype=np.float32)
+
+        src_coords = self.node_coords[edge_index[0]]
+        dst_coords = self.node_coords[edge_index[1]]
+
+        distances_km = self._haversine_distance_km(src_coords, dst_coords)
+        max_distance = float(distances_km.max()) if distances_km.size > 0 else 0.0
+        if max_distance > 0.0:
+            normalized_distance = distances_km / max_distance
+        else:
+            normalized_distance = np.zeros_like(distances_km, dtype=np.float32)
+
+        delta_lon = dst_coords[:, 0] - src_coords[:, 0]
+        delta_lat = dst_coords[:, 1] - src_coords[:, 1]
+        direction_norm = np.sqrt(delta_lon ** 2 + delta_lat ** 2)
+        safe_norm = np.where(direction_norm > 0.0, direction_norm, 1.0)
+        direction_cos = (delta_lon / safe_norm).astype(np.float32)
+        direction_sin = (delta_lat / safe_norm).astype(np.float32)
+        direction_cos[direction_norm <= 0.0] = 0.0
+        direction_sin[direction_norm <= 0.0] = 0.0
+
+        return np.stack(
+            [
+                edge_weights,
+                normalized_distance.astype(np.float32),
+                direction_cos,
+                direction_sin,
+            ],
+            axis=1,
+        )
 
     @staticmethod
     def add_self_loops_intelligently(edge_index: np.ndarray, edge_attr: np.ndarray,
@@ -255,6 +333,7 @@ class SpatialGraphBuilder:
         # Update instance variables for future use
         self.grid_id_to_idx = new_grid_id_to_idx
         self.idx_to_grid_id = new_idx_to_grid_id
+        self._refresh_node_coords()
 
         # Now convert edge list to indices
         final_edge_list = []
@@ -300,6 +379,8 @@ class SpatialGraphBuilder:
             edge_index, edge_weights = self.add_self_loops_intelligently(
                 edge_index, edge_weights, num_nodes, weight=config.SELF_LOOP_WEIGHT
             )
+            final_edge_list = edge_index.T.tolist()
+            final_edge_weights = edge_weights.tolist()
 
         # Phase 2.2: KNN fallback for isolated nodes
         if config.USE_KNN_FALLBACK:
@@ -376,7 +457,10 @@ class SpatialGraphBuilder:
 
         src = edge_index[0]
         dst = edge_index[1]
-        weights = edge_weights.astype(np.float64, copy=False)
+        ranking_weights = edge_weights
+        if ranking_weights.ndim > 1:
+            ranking_weights = ranking_weights[:, 0]
+        weights = np.asarray(ranking_weights, dtype=np.float64)
 
         keep_out = self._topk_indices_by_group(src, weights, topk_out)
         keep_in = self._topk_indices_by_group(dst, weights, topk_in)
