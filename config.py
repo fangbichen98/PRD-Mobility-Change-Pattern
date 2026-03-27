@@ -81,7 +81,7 @@ LAPLACIAN_PE_DIM = 16        # Laplacian Positional Encoding dimension (for GINE
 # GINE edge feature mode:
 # - "flow_only": scalar edge weight only (legacy behavior)
 # - "flow_distance_direction": 4-dim edge attr [flow, normalized_distance, cos(theta), sin(theta)]
-GINE_EDGE_FEATURE_MODE = "flow_only"
+GINE_EDGE_FEATURE_MODE = "flow_distance_direction"
 # Spatial node feature mode for non-GINE branches:
 # - "ones": featureless all-1 node input (default)
 # - "temporal_mean": use per-node mean over 168x2 temporal sequence as node features
@@ -91,6 +91,9 @@ GINE_EDGE_FEATURE_MODE = "flow_only"
 # - "raw_temporal_graph_stats": use raw flow stats + graph structural stats as node features;
 #   for GINE this is concatenated with Laplacian PE
 SPATIAL_NODE_FEATURE_MODE = "raw_temporal_mean"
+# Whether to concatenate normalized (lon, lat) spatial coordinates into GINE node features.
+# Only effective when SPATIAL_MODEL="GINE". Adds 2 extra input dimensions alongside Laplacian PE.
+GINE_USE_SPATIAL_COORDS = True
 # Note: GCN doesn't use attention heads (unlike GAT)
 # Legacy GAT_* parameters are kept for backward compatibility
 SPATIAL_HEADS = 4            # Deprecated: Not used by GCN (only for GAT)

@@ -175,12 +175,19 @@ class EnhancedDualBranchModel(nn.Module):
         # Spatial branch: Choose model type
         spatial_model = "GINE" if spatial_model == "GIN" else spatial_model
 
+        self.gine_use_spatial_coords = (
+            getattr(config, 'GINE_USE_SPATIAL_COORDS', False)
+            and spatial_model in ('GINE', 'GIN')
+        )
+
         if spatial_model == "GINE":
             gine_edge_feature_mode = getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
             edge_dim = 4 if gine_edge_feature_mode == 'flow_distance_direction' else 1
             gine_input_size = config.LAPLACIAN_PE_DIM
             if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
                 gine_input_size += self.RAW_TEMPORAL_GRAPH_STATS_DIM
+            if self.gine_use_spatial_coords:
+                gine_input_size += 2  # normalized (lon, lat)
             self.spatial_branch = PureGraphDualYearGINE(
                 input_size=gine_input_size,
                 hidden_size=config.SPATIAL_HIDDEN_SIZE,
@@ -255,6 +262,17 @@ class EnhancedDualBranchModel(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_size // 2, num_classes)
         )
+
+    def register_node_coords(self, node_coords: torch.Tensor):
+        """Register normalized spatial coordinates as a buffer for GINE node features.
+
+        Args:
+            node_coords: (num_nodes, 2) tensor of [lon, lat] coordinates.
+        """
+        mean = node_coords.mean(dim=0, keepdim=True)
+        std = node_coords.std(dim=0, keepdim=True).clamp_min(1e-6)
+        normalized = (node_coords - mean) / std
+        self.register_buffer('_node_coords', normalized)
 
     @staticmethod
     def _mode_requires_raw_temporal(node_feature_mode: str) -> bool:
@@ -355,16 +373,21 @@ class EnhancedDualBranchModel(nn.Module):
     def _build_gine_node_features(self, graphs_2021, graphs_2024, num_nodes, raw_x_2021, raw_x_2024, device):
         self.compute_laplacian_pe_if_needed(graphs_2021, graphs_2024, num_nodes, device)
 
-        if self.spatial_node_feature_mode != 'raw_temporal_graph_stats':
-            return self.laplacian_pe_2021, self.laplacian_pe_2024
+        features_2021 = self.laplacian_pe_2021
+        features_2024 = self.laplacian_pe_2024
 
-        raw_graph_stats_2021 = self._compute_raw_temporal_graph_stats(raw_x_2021, graphs_2021, num_nodes)
-        raw_graph_stats_2024 = self._compute_raw_temporal_graph_stats(raw_x_2024, graphs_2024, num_nodes)
+        if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
+            raw_graph_stats_2021 = self._compute_raw_temporal_graph_stats(raw_x_2021, graphs_2021, num_nodes)
+            raw_graph_stats_2024 = self._compute_raw_temporal_graph_stats(raw_x_2024, graphs_2024, num_nodes)
+            features_2021 = torch.cat([features_2021, raw_graph_stats_2021], dim=1)
+            features_2024 = torch.cat([features_2024, raw_graph_stats_2024], dim=1)
 
-        return (
-            torch.cat([self.laplacian_pe_2021, raw_graph_stats_2021], dim=1),
-            torch.cat([self.laplacian_pe_2024, raw_graph_stats_2024], dim=1),
-        )
+        if self.gine_use_spatial_coords and hasattr(self, '_node_coords'):
+            coords = self._node_coords.to(device)
+            features_2021 = torch.cat([features_2021, coords], dim=1)
+            features_2024 = torch.cat([features_2024, coords], dim=1)
+
+        return features_2021, features_2024
 
     def compute_laplacian_pe_if_needed(self, graphs_2021, graphs_2024, num_nodes, device):
         """Compute Laplacian PE for GINE model if not already computed"""

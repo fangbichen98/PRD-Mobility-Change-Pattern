@@ -648,6 +648,18 @@ def main():
         fusion_ablation_mode=args.fusion_ablation_mode
     )
 
+    # Register spatial coordinates for GINE node features
+    if getattr(model, 'gine_use_spatial_coords', False):
+        node_coords = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        grid_id_to_idx = data['grid_id_to_idx']
+        coord_lookup = data['metadata_df'].set_index('grid_id')[['lon', 'lat']]
+        for grid_id, idx in grid_id_to_idx.items():
+            if grid_id in coord_lookup.index:
+                node_coords[idx, 0] = float(coord_lookup.at[grid_id, 'lon'])
+                node_coords[idx, 1] = float(coord_lookup.at[grid_id, 'lat'])
+        model.register_node_coords(node_coords)
+        logger.info(f"  - Registered spatial coordinates for GINE node features ({node_coords.shape})")
+
     model = model.to(device)
 
     # Move graphs to device
