@@ -12,10 +12,10 @@ import os
 # ==============================================================================
 # These paths are used by dual_year_processor.py (called by train_multiscale_temporal.py)
 DATA_DIR = "data"
-OD_2021_PATH = os.path.join(DATA_DIR, "2021_sgh_week.csv")
-OD_2024_PATH = os.path.join(DATA_DIR, "2024_sgh_week.csv")
-GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "sgh_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "labels_sgh_entropy_0.03_random.csv")
+OD_2021_PATH = os.path.join(DATA_DIR, "2021_gba_week.csv")
+OD_2024_PATH = os.path.join(DATA_DIR, "2024_gba_week.csv")
+GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "PRD_grid_metadata.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "labels_gba_entropy_1200_per_class.csv")
 
 # ==============================================================================
 # DATA PREPROCESSING
@@ -34,8 +34,8 @@ KNN_FALLBACK_WEIGHT = 0.5  # Weight for KNN fallback edges (lower priority than 
 
 # Optional node-wise edge sparsification (disabled by default)
 # Keep top-k outgoing/incoming edges per node and take union.
-GRAPH_TOPK_OUT = None
-GRAPH_TOPK_IN = None
+GRAPH_TOPK_OUT = 20
+GRAPH_TOPK_IN = 20
 # Graph temporal mode for spatial branch:
 # - "static": single aggregated graph per year (current default)
 # - "daily": 7 discrete daily snapshots per year (fixed topology + dynamic edge weights)
@@ -58,7 +58,7 @@ RANDOM_SEED = 42   # Random seed for reproducibility
 # ==============================================================================
 # Multi-Scale Temporal Branch (LSTM-based)
 TEMPORAL_INPUT_SIZE = 2  # Input feature dimension: 
-TEMPORAL_MODEL = "LSTM"  # Options: "LSTM", "GRU", "TCN", "TRANSFORMER", "TRANSFORMER_FULL", "BIGRU"
+TEMPORAL_MODEL = "TRANSFORMER"  # Options: "LSTM", "GRU", "TCN", "TRANSFORMER", "TRANSFORMER_FULL", "BIGRU"
 LSTM_LAYERS = 3          # Number of LSTM layers
 LSTM_HIDDEN_SIZE = 256   # LSTM hidden units
 LSTM_DROPOUT = 0.4       # LSTM dropout rate
@@ -74,7 +74,7 @@ TRANSFORMER_FULL_FF_MULTIPLIER = 4
 # MODEL ARCHITECTURE - SPATIAL BRANCH
 # ==============================================================================
 # Spatial Branch Options: GCN, GraphSAGE, weighted GraphConv, EvolveGCN-inspired, or GINE
-SPATIAL_MODEL = "GCN"        # Options: "GCN", "SAGE", "WGCN", "EVOLVEGCN", "GINE"
+SPATIAL_MODEL = "GINE"        # Options: "GCN", "SAGE", "WGCN", "EVOLVEGCN", "GINE"
 SPATIAL_LAYERS = 2           # Number of spatial layers
 SPATIAL_HIDDEN_SIZE = 128    # Spatial branch hidden units
 LAPLACIAN_PE_DIM = 16        # Laplacian Positional Encoding dimension (for GINE)

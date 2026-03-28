@@ -87,6 +87,8 @@ def parse_args():
                         choices=['flow_only', 'flow_distance_direction'],
                         default=None,
                         help='Edge feature mode for GINE: flow only or flow+distance+direction')
+    parser.add_argument('--gine-use-spatial-coords', action='store_true', default=None,
+                        help='Concatenate normalized (lon, lat) into GINE node features')
     parser.add_argument('--branch-ablation-mode', type=str, choices=['full', 'temporal_only', 'spatial_only'], default='full',
                         help='Ablate temporal/spatial branches while keeping the same training pipeline')
     parser.add_argument('--fusion-ablation-mode', type=str, choices=['gated', 'mean', 'concat'], default='gated',
@@ -430,6 +432,8 @@ def main():
         config.SPATIAL_NODE_FEATURE_MODE = args.spatial_node_feature_mode
     if args.gine_edge_feature_mode is not None:
         config.GINE_EDGE_FEATURE_MODE = args.gine_edge_feature_mode
+    if args.gine_use_spatial_coords:
+        config.GINE_USE_SPATIAL_COORDS = True
     if args.graph_temporal_mode is not None:
         config.GRAPH_TEMPORAL_MODE = args.graph_temporal_mode
     if args.temporal_layers is not None:

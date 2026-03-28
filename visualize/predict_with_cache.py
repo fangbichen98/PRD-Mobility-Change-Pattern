@@ -89,11 +89,8 @@ def apply_geographic_axes_style(ax, lon_min, lon_max, lat_min, lat_max, scalebar
     add_scalebar(ax, lon_min, lon_max, lat_min, lat_max, length_km=scalebar_km, position=scalebar_position)
     add_north_arrow(ax)
 
-def load_cached_data(cache_path):
-    """Load cached data"""
-    print(f"Loading cached data from {cache_path}...")
-    with open(cache_path, 'rb') as f:
-        data = pickle.load(f)
+def _print_cached_data_summary(data: dict):
+    """Print summary of loaded cached data."""
     print(f"✓ Loaded cached data")
     print(f"  - Grids with features: {len(data['change_features'])}")
     print(f"  - Total grids in mapping: {len(data['grid_id_to_idx'])}")
@@ -107,6 +104,66 @@ def load_cached_data(cache_path):
         print(f"  - Training-flow total samples: {data['train_flow_total_samples']}")
     if data.get('train_flow_cache_file'):
         print(f"  - Training-flow cache source: {data['train_flow_cache_file']}")
+    if data.get('edge_feature_mode'):
+        print(f"  - Edge feature mode: {data['edge_feature_mode']}")
+
+
+def load_split_cached_data(feature_path: str, graph_path: str) -> dict:
+    """Load and merge the two-level split cache (features + graph variant)."""
+    print(f"Loading split cache:")
+    print(f"  features : {feature_path}")
+    print(f"  graphs   : {graph_path}")
+    with open(feature_path, 'rb') as f:
+        feat = pickle.load(f)
+    with open(graph_path, 'rb') as f:
+        graph = pickle.load(f)
+
+    # Respect explicit None (full-grid cache with no train mask) vs absent key
+    _sentinel = object()
+    _tfgi = feat.get('train_flow_grid_ids', _sentinel)
+    if _tfgi is _sentinel:
+        # key absent — fall back to flows_2021 keys (old training caches)
+        train_flow_grid_ids = sorted(feat.get('flows_2021', {}).keys())
+    else:
+        # key present (may be None for full-grid caches without a train mask)
+        train_flow_grid_ids = _tfgi
+    label_hash = feat.get('label_file_hash') or feat.get('train_flow_label_hash')
+
+    data = {
+        # from feature cache
+        'change_features':          feat['change_features'],
+        'flows_2021':               feat.get('flows_2021', {}),
+        'flows_2024':               feat.get('flows_2024', {}),
+        'train_flow_grid_ids':      train_flow_grid_ids,
+        'train_flow_total_samples': len(train_flow_grid_ids) if train_flow_grid_ids is not None else None,
+        'train_flow_label_hash':    label_hash,
+        'label_file_hash':          label_hash,
+        # from graph variant cache
+        'graphs_2021':              graph['graphs_2021'],
+        'graphs_2024':              graph['graphs_2024'],
+        'grid_id_to_idx':           graph['grid_id_to_idx'],
+        'edge_index':               graph.get('edge_index'),
+        'edge_weights':             graph.get('edge_weights'),
+        'edge_feature_mode':        graph.get('edge_feature_mode', 'flow_only'),
+        # provenance
+        'train_flow_cache_file':    f"split:{os.path.basename(feature_path)}+{os.path.basename(graph_path)}",
+        'is_full_grid_cache':       feat.get('is_full_grid_cache', False),
+    }
+    _print_cached_data_summary(data)
+    return data
+
+
+def load_cached_data(cache_path_or_pair):
+    """Load cached data — accepts either a monolithic path (str) or a split-cache pair (tuple)."""
+    if isinstance(cache_path_or_pair, tuple):
+        feature_path, graph_path = cache_path_or_pair
+        return load_split_cached_data(feature_path, graph_path)
+
+    cache_path = cache_path_or_pair
+    print(f"Loading cached data from {cache_path}...")
+    with open(cache_path, 'rb') as f:
+        data = pickle.load(f)
+    _print_cached_data_summary(data)
     return data
 
 
@@ -184,6 +241,16 @@ def infer_node_mode_from_manifest(manifest: dict):
     )
 
 
+def infer_edge_feature_mode_from_manifest(manifest: dict) -> str:
+    return (
+        manifest.get('model_architecture', {})
+        .get('spatial_branch', {})
+        .get('edge_feature_mode')
+        or manifest.get('data_config', {}).get('graph_edge_feature_mode')
+        or 'flow_only'
+    )
+
+
 def cache_matches_train_flow_manifest(cached_data: dict, manifest: dict) -> bool:
     expected = manifest.get('data_info', {})
     expected_total = expected.get('total_samples')
@@ -240,20 +307,40 @@ def validate_inference_consistency(cached_data: dict, manifest: dict, cache_path
             f"SPATIAL_NODE_FEATURE_MODE expected {trained_node_mode} but current config is {runtime_node_mode}"
         )
 
-    if trained_node_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'} and 'train_flow_grid_ids' not in cached_data:
+    trained_edge_mode = infer_edge_feature_mode_from_manifest(manifest)
+    runtime_edge_mode = getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
+    if trained_spatial_model == 'GINE' and trained_edge_mode != runtime_edge_mode:
         mismatches.append(
-            "cache missing explicit train_flow_grid_ids required to reproduce training-time raw-flow masking"
+            f"GINE_EDGE_FEATURE_MODE expected {trained_edge_mode} but current config is {runtime_edge_mode}"
         )
-    if trained_node_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'} and not cache_matches_train_flow_manifest(cached_data, manifest):
-        expected_total = expected.get('total_samples')
-        expected_hash = expected.get('label_file_hash')
-        actual_total = len(cached_data.get('train_flow_grid_ids', []))
-        actual_hash = cached_data.get('train_flow_label_hash') or cached_data.get('label_file_hash')
+
+    # Cross-check edge_feature_mode stored in cache against what the manifest expects.
+    # This catches the exact bug where a wrong cache (e.g. flow_only) is used for a
+    # model trained with flow_distance_direction, silently corrupting spatial branch output.
+    cache_edge_mode = cached_data.get('edge_feature_mode')
+    if cache_edge_mode and cache_edge_mode != trained_edge_mode:
         mismatches.append(
-            "training-flow mask provenance mismatch "
-            f"(expected label_hash={expected_hash}, total_samples={expected_total}; "
-            f"got label_hash={actual_hash}, train_flow_grids={actual_total})"
+            f"cache edge_feature_mode={cache_edge_mode!r} but manifest expects {trained_edge_mode!r}"
         )
+
+    is_full_grid_cache = cached_data.get('is_full_grid_cache', False)
+    if trained_node_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'} and not is_full_grid_cache:
+        if 'train_flow_grid_ids' not in cached_data:
+            mismatches.append(
+                "cache missing explicit train_flow_grid_ids required to reproduce training-time raw-flow masking"
+            )
+        elif not cache_matches_train_flow_manifest(cached_data, manifest):
+            expected_total = expected.get('total_samples')
+            expected_hash = expected.get('label_file_hash')
+            actual_total = len(cached_data.get('train_flow_grid_ids', []))
+            actual_hash = cached_data.get('train_flow_label_hash') or cached_data.get('label_file_hash')
+            mismatches.append(
+                "training-flow mask provenance mismatch "
+                f"(expected label_hash={expected_hash}, total_samples={expected_total}; "
+                f"got label_hash={actual_hash}, train_flow_grids={actual_total})"
+            )
+    if is_full_grid_cache:
+        print("  (full-grid inference cache: train-flow provenance check skipped)")
 
     if mismatches:
         detail = '\n  - '.join(mismatches)
@@ -266,8 +353,19 @@ def validate_inference_consistency(cached_data: dict, manifest: dict, cache_path
         )
 
 
-def resolve_cache_path_from_manifest(default_cache_path: str, manifest: dict) -> str:
-    """Pick a cache file whose graph edge counts match the experiment manifest."""
+def resolve_cache_paths_from_manifest(default_cache_path: str, manifest: dict):
+    """
+    Pick a cache whose graph edge counts (and edge_feature_mode) match the manifest.
+
+    Returns either:
+      - str                  — monolithic cache path (old format)
+      - (str, str)           — (feature_cache_path, graph_variant_cache_path) split format
+
+    Priority:
+      1. VIS_CACHE_PATH env var → return as monolithic (unchanged)
+      2. Old-style monolithic caches in data/cache/dual_year_data_*.pkl
+      3. NEW: split caches in data/cache/graphs/ + data/cache/features/
+    """
     if os.environ.get('VIS_CACHE_PATH'):
         return default_cache_path
 
@@ -275,20 +373,23 @@ def resolve_cache_path_from_manifest(default_cache_path: str, manifest: dict) ->
     expected_e2021 = expected.get('graph_2021_edges')
     expected_e2024 = expected.get('graph_2024_edges')
     trained_node_mode = infer_node_mode_from_manifest(manifest)
+    trained_edge_mode = infer_edge_feature_mode_from_manifest(manifest)
     require_train_flow_match = trained_node_mode in {'raw_temporal_mean', 'raw_temporal_graph_stats'}
+
     if expected_e2021 is None or expected_e2024 is None:
         return default_cache_path
 
     expected_e2021 = int(expected_e2021)
     expected_e2024 = int(expected_e2024)
 
+    # --- 1. Try old-style monolithic caches (backward compat) ---
     candidate_paths = []
     if os.path.exists(default_cache_path):
         candidate_paths.append(default_cache_path)
     candidate_paths.extend(sorted(glob.glob('data/cache/dual_year_data_*.pkl')))
 
-    best_path = None
-    best_score = None
+    best_mono_path = None
+    best_mono_score = None
 
     for path in candidate_paths:
         try:
@@ -310,21 +411,136 @@ def resolve_cache_path_from_manifest(default_cache_path: str, manifest: dict) ->
                 1 if has_train_mask else 0,
                 feature_count,
             )
-            if best_score is None or score > best_score:
-                best_score = score
-                best_path = path
+            if best_mono_score is None or score > best_mono_score:
+                best_mono_score = score
+                best_mono_path = path
         except Exception:
             continue
 
-    if best_path:
+    # --- 2. Try new split caches ---
+    best_split = None      # (feat_path, graph_path)
+    best_split_score = None
+
+    graph_variant_paths = sorted(glob.glob('data/cache/graphs/dual_year_graph_variant_*.pkl'))
+    feature_paths = sorted(glob.glob('data/cache/features/dual_year_features_*.pkl'))
+
+    for graph_path in graph_variant_paths:
+        try:
+            with open(graph_path, 'rb') as f:
+                graph_data = pickle.load(f)
+            actual_e2021 = int(graph_data['graphs_2021'][0][0].shape[1])
+            actual_e2024 = int(graph_data['graphs_2024'][0][0].shape[1])
+            if actual_e2021 != expected_e2021 or actual_e2024 != expected_e2024:
+                continue
+            cache_edge_mode = graph_data.get('edge_feature_mode', 'flow_only')
+            if cache_edge_mode != trained_edge_mode:
+                continue
+        except Exception:
+            continue
+
+        # Find best matching feature cache
+        # Priority: full-grid cache > training cache with provenance match > others
+        for feat_path in feature_paths:
+            try:
+                with open(feat_path, 'rb') as f:
+                    feat_data = pickle.load(f)
+                feature_count = len(feat_data.get('change_features', {}))
+                if feature_count == 0:
+                    continue
+
+                is_full_grid = feat_data.get('is_full_grid_cache', False)
+
+                if not is_full_grid:
+                    # Build a minimal proxy dict for cache_matches_train_flow_manifest
+                    proxy = {
+                        'train_flow_grid_ids': feat_data.get('train_flow_grid_ids',
+                                                              sorted(feat_data.get('flows_2021', {}).keys())),
+                        'train_flow_label_hash': feat_data.get('label_file_hash') or feat_data.get('train_flow_label_hash'),
+                        'label_file_hash':       feat_data.get('label_file_hash') or feat_data.get('train_flow_label_hash'),
+                        'train_flow_total_samples': len(feat_data.get('train_flow_grid_ids',
+                                                                       sorted(feat_data.get('flows_2021', {}).keys()))),
+                    }
+                    train_flow_match = cache_matches_train_flow_manifest(proxy, manifest)
+                    if require_train_flow_match and not train_flow_match:
+                        continue
+                else:
+                    train_flow_match = False  # full-grid cache has no label provenance
+
+                has_train_mask = 'train_flow_grid_ids' in feat_data
+                # full-grid cache scores highest on feature_count dimension;
+                # use is_full_grid as the top-level tiebreaker
+                score = (
+                    1 if is_full_grid else 0,       # prefer full-grid for visualization
+                    1 if train_flow_match else 0,
+                    1 if has_train_mask else 0,
+                    feature_count,
+                )
+                if best_split_score is None or score > best_split_score:
+                    best_split_score = score
+                    best_split = (feat_path, graph_path)
+            except Exception:
+                continue
+
+    # --- Choose best result ---
+    # Prefer split cache when it has a better or equal score (it carries edge_feature_mode)
+    if best_split is not None:
+        feat_path, graph_path = best_split
         print(
-            f"Auto-selected VIS cache by edge match: {best_path} "
-            f"(score={best_score}, "
+            f"Auto-selected split cache: "
+            f"{os.path.basename(feat_path)} + {os.path.basename(graph_path)} "
+            f"(score={best_split_score}, edge_mode={trained_edge_mode}, "
             f"expected_edges=({expected_e2021},{expected_e2024}))"
         )
-        return best_path
+        return best_split
+
+    if best_mono_path is not None:
+        print(
+            f"Auto-selected VIS cache by edge match: {best_mono_path} "
+            f"(score={best_mono_score}, "
+            f"expected_edges=({expected_e2021},{expected_e2024}))"
+        )
+        return best_mono_path
 
     return default_cache_path
+
+def infer_gine_use_spatial_coords_from_checkpoint(model_path: str, manifest: dict) -> bool:
+    """
+    Infer GINE_USE_SPATIAL_COORDS from the first GINE layer weight shape in the checkpoint.
+
+    The first GINE layer input dim = LAPLACIAN_PE_DIM [+ RAW_TEMPORAL_GRAPH_STATS_DIM] [+ 2 if spatial_coords].
+    We compare the actual checkpoint dim against what we'd expect without spatial coords.
+    """
+    spatial_type = infer_spatial_model_from_manifest(manifest)
+    if spatial_type != 'GINE':
+        return False
+
+    laplacian_pe_dim = (
+        manifest.get('model_architecture', {})
+        .get('spatial_branch', {})
+        .get('laplacian_pe_dim')
+        or getattr(config, 'LAPLACIAN_PE_DIM', 16)
+    )
+    node_mode = infer_node_mode_from_manifest(manifest)
+    RAW_TEMPORAL_GRAPH_STATS_DIM = 10
+    base_dim = int(laplacian_pe_dim)
+    if node_mode == 'raw_temporal_graph_stats':
+        base_dim += RAW_TEMPORAL_GRAPH_STATS_DIM
+
+    try:
+        ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
+        sd = ckpt.get('model_state_dict', ckpt)
+        w = sd.get('spatial_branch.gine_layers.0.nn.0.weight')
+        if w is None:
+            return getattr(config, 'GINE_USE_SPATIAL_COORDS', False)
+        actual_dim = w.shape[1]
+        use_coords = (actual_dim == base_dim + 2)
+        print(f"Inferred GINE_USE_SPATIAL_COORDS={use_coords} "
+              f"(checkpoint first-layer input={actual_dim}, base_dim={base_dim})")
+        return use_coords
+    except Exception as e:
+        print(f"[WARN] Could not infer GINE_USE_SPATIAL_COORDS from checkpoint: {e}")
+        return getattr(config, 'GINE_USE_SPATIAL_COORDS', False)
+
 
 def infer_temporal_model_from_manifest(manifest: dict) -> str:
     return (
@@ -1035,23 +1251,32 @@ def main():
 
     # Load manifest from experiment outputs and align runtime config.
     manifest = load_experiment_manifest(EXPERIMENT_DIR)
-    cache_path = resolve_cache_path_from_manifest(cache_path, manifest)
+    cache_result = resolve_cache_paths_from_manifest(cache_path, manifest)
     config.SPATIAL_MODEL = infer_spatial_model_from_manifest(manifest)
     manifest_node_mode = (
         manifest.get('model_architecture', {})
         .get('spatial_branch', {})
         .get('node_feature_mode')
     )
+    manifest_edge_mode = infer_edge_feature_mode_from_manifest(manifest)
     if manifest_node_mode:
         config.SPATIAL_NODE_FEATURE_MODE = manifest_node_mode
+    config.GINE_EDGE_FEATURE_MODE = manifest_edge_mode
+    # Infer GINE_USE_SPATIAL_COORDS from checkpoint weight shape (not recorded in manifest)
+    config.GINE_USE_SPATIAL_COORDS = infer_gine_use_spatial_coords_from_checkpoint(model_path, manifest)
     print(f"Using SPATIAL_MODEL from manifest: {config.SPATIAL_MODEL}")
     print(f"Using SPATIAL_NODE_FEATURE_MODE from manifest: {getattr(config, 'SPATIAL_NODE_FEATURE_MODE', 'ones')}")
+    print(f"Using GINE_EDGE_FEATURE_MODE from manifest: {getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')}")
+    print(f"Using GINE_USE_SPATIAL_COORDS (inferred): {getattr(config, 'GINE_USE_SPATIAL_COORDS', False)}")
 
     # Load cached data
-    cached_data = load_cached_data(cache_path)
+    cached_data = load_cached_data(cache_result)
 
     # Fail fast if cache/model/training settings do not match.
-    validate_inference_consistency(cached_data, manifest, cache_path)
+    cache_path_str = (
+        f"{cache_result[0]}+{cache_result[1]}" if isinstance(cache_result, tuple) else cache_result
+    )
+    validate_inference_consistency(cached_data, manifest, cache_path_str)
     print("✓ Inference consistency check passed")
 
     # Load model

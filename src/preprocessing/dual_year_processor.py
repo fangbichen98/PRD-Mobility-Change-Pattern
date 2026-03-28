@@ -513,15 +513,18 @@ def _build_daily_graph_sequence_from_static(
 def _resolve_edge_feature_mode(spatial_model: str, edge_feature_mode: str = None) -> str:
     """Resolve effective graph edge feature mode for the current experiment."""
     spatial_model = (spatial_model or getattr(config, 'SPATIAL_MODEL', 'GCN')).upper()
-    configured_mode = edge_feature_mode or getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
+    configured_mode = edge_feature_mode or getattr(config, 'EDGE_FEATURE_MODE', 'flow_only')
 
-    if spatial_model != 'GINE':
+    # Only GINE and GAT support multi-dimensional edge features
+    MULTI_DIM_MODELS = {'GINE', 'GAT'}
+    if spatial_model not in MULTI_DIM_MODELS:
         return 'flow_only'
 
-    if configured_mode not in {'flow_only', 'flow_distance_direction'}:
+    valid_modes = {'flow_only', 'flow_distance_direction', 'flow_distribution'}
+    if configured_mode not in valid_modes:
         raise ValueError(
-            f"Unsupported GINE edge feature mode: {configured_mode}. "
-            "Use 'flow_only' or 'flow_distance_direction'."
+            f"Unsupported edge feature mode: {configured_mode}. "
+            f"Use one of {valid_modes}."
         )
 
     return configured_mode

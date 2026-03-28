@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-EXPERIMENT_DIR = Path('outputs/multiscale_temporal_20260319_024849_label_sgh_phase24_transformer_gcn_spc250_seed202_e300p30')
+EXPERIMENT_DIR = Path('outputs/multiscale_temporal_20260323_192012_label_sgh_phase31_transformer_gine_flowdistdir_spc250_seed202_e300p30')
 MODEL_PREDICTIONS_DIR = EXPERIMENT_DIR / 'model_predictions'
 METRICS_DIR = EXPERIMENT_DIR / 'metrics'
 
