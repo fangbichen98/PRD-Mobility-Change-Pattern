@@ -21,8 +21,34 @@ import json
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import torch.nn.functional as F
+
 import config
 from src.preprocessing.dual_year_processor import prepare_dual_year_experiment_data
+
+
+class FocalLoss(nn.Module):
+    """Focal Loss for multi-class classification.
+
+    Dynamically down-weights easy examples so training focuses on hard ones.
+    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+
+    Args:
+        gamma: focusing parameter. 0 = standard cross-entropy. Default: 2.
+        weight: per-class weights tensor (same as CrossEntropyLoss weight). Default: None.
+    """
+
+    def __init__(self, gamma: float = 2.0, weight=None):
+        super().__init__()
+        self.gamma = gamma
+        self.weight = weight
+
+    def forward(self, logits, targets):
+        # ce shape: (N,)  — per-sample loss before reduction
+        ce = F.cross_entropy(logits, targets, weight=self.weight, reduction='none')
+        pt = torch.exp(-ce)                         # probability of the correct class
+        focal = ((1.0 - pt) ** self.gamma) * ce     # down-weight easy examples
+        return focal.mean()
 
 # Import Enhanced model with Multi-Scale Temporal Branch
 from src.models.enhanced_dual_branch_model import EnhancedDualBranchModel
@@ -80,19 +106,31 @@ def parse_args():
     parser.add_argument('--random-seed', type=int, default=None,
                         help='Override random seed for data sampling/splitting')
     parser.add_argument('--spatial-node-feature-mode', type=str,
-                        choices=['ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', 'raw_temporal_mean', 'raw_temporal_graph_stats'],
+                        choices=['ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', 'raw_temporal_mean', 'raw_temporal_graph_stats', 'flow_wamd'],
                         default=None,
                         help='Spatial node feature mode for non-GINE branches')
     parser.add_argument('--gine-edge-feature-mode', type=str,
-                        choices=['flow_only', 'flow_distance_direction'],
+                        choices=['flow_only', 'flow_distance_direction', 'flow_distribution'],
                         default=None,
                         help='Edge feature mode for GINE: flow only or flow+distance+direction')
     parser.add_argument('--gine-use-spatial-coords', action='store_true', default=None,
                         help='Concatenate normalized (lon, lat) into GINE node features')
+    parser.add_argument('--temporal-feature-mode', type=str,
+                        choices=['inflow_outflow', 'total_wamd'], default=None,
+                        help='Temporal feature mode: inflow_outflow (legacy) or total_wamd')
     parser.add_argument('--branch-ablation-mode', type=str, choices=['full', 'temporal_only', 'spatial_only'], default='full',
                         help='Ablate temporal/spatial branches while keeping the same training pipeline')
     parser.add_argument('--fusion-ablation-mode', type=str, choices=['gated', 'mean', 'concat'], default='gated',
                         help='Ablate fusion mechanism by replacing gated fusion with simple mean pooling or concat')
+    # Spatial architecture overrides
+    parser.add_argument('--spatial-layers', type=int, default=None,
+                        help='Override config.SPATIAL_LAYERS (number of GCN/GINE layers)')
+    parser.add_argument('--spatial-hidden-size', type=int, default=None,
+                        help='Override config.SPATIAL_HIDDEN_SIZE (hidden units per spatial layer)')
+    # Loss function
+    parser.add_argument('--focal-loss-gamma', type=float, default=None,
+                        help='Use Focal Loss with this gamma value instead of CrossEntropy. '
+                             'Recommended: 2.0. None (default) = standard weighted CrossEntropy.')
     return parser.parse_args()
 
 
@@ -434,10 +472,18 @@ def main():
         config.GINE_EDGE_FEATURE_MODE = args.gine_edge_feature_mode
     if args.gine_use_spatial_coords:
         config.GINE_USE_SPATIAL_COORDS = True
+    if args.temporal_feature_mode is not None:
+        config.TEMPORAL_FEATURE_MODE = args.temporal_feature_mode
     if args.graph_temporal_mode is not None:
         config.GRAPH_TEMPORAL_MODE = args.graph_temporal_mode
     if args.temporal_layers is not None:
         config.LSTM_LAYERS = args.temporal_layers
+    if args.spatial_layers is not None:
+        config.SPATIAL_LAYERS = args.spatial_layers
+    if args.spatial_hidden_size is not None:
+        config.SPATIAL_HIDDEN_SIZE = args.spatial_hidden_size
+
+    focal_loss_gamma = args.focal_loss_gamma  # None → CrossEntropy, float → FocalLoss
 
     graph_topk_out = config.GRAPH_TOPK_OUT
     graph_topk_in = config.GRAPH_TOPK_IN
@@ -523,9 +569,10 @@ def main():
     temporal_features_2024 = {}
 
     for grid_id, features in data['change_features'].items():
-        # Features shape: (168, 4) = [inflow_2021_log, outflow_2021_log, inflow_2024_log, outflow_2024_log]
-        temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2) - [inflow, outflow] for 2021
-        temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2) - [inflow, outflow] for 2024
+        # Features shape: (168, 4) = [feat0_2021, feat1_2021, feat0_2024, feat1_2024]
+        # Works for both inflow_outflow and total_wamd modes (same split logic)
+        temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2) for 2021
+        temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2) for 2024
 
     logger.info(f"✓ Temporal features prepared")
 
@@ -664,6 +711,23 @@ def main():
         model.register_node_coords(node_coords)
         logger.info(f"  - Registered spatial coordinates for GINE node features ({node_coords.shape})")
 
+    # Register wamd node features for flow_wamd spatial node feature mode
+    if config.SPATIAL_NODE_FEATURE_MODE == 'flow_wamd':
+        wamd_2021_dict = data.get('wamd_node_features_2021')
+        wamd_2024_dict = data.get('wamd_node_features_2024')
+        if wamd_2021_dict is None or wamd_2024_dict is None:
+            raise ValueError("flow_wamd mode requires TEMPORAL_FEATURE_MODE='total_wamd' to precompute wamd features")
+        grid_id_to_idx = data['grid_id_to_idx']
+        wamd_2021 = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        wamd_2024 = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        for grid_id, idx in grid_id_to_idx.items():
+            if grid_id in wamd_2021_dict:
+                wamd_2021[idx] = torch.from_numpy(wamd_2021_dict[grid_id])
+            if grid_id in wamd_2024_dict:
+                wamd_2024[idx] = torch.from_numpy(wamd_2024_dict[grid_id])
+        model.register_wamd_node_features(wamd_2021, wamd_2024)
+        logger.info(f"  - Registered wamd node features ({wamd_2021.shape})")
+
     model = model.to(device)
 
     # Move graphs to device
@@ -692,7 +756,12 @@ def main():
     logger.info("=" * 80)
 
     class_weights = data['class_weights'].to(device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    if focal_loss_gamma is not None:
+        criterion = FocalLoss(gamma=focal_loss_gamma, weight=class_weights)
+        loss_desc = f"Focal Loss (gamma={focal_loss_gamma}, weighted)"
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        loss_desc = "Weighted CrossEntropy"
 
     # Optimizer and scheduler
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=config.WEIGHT_DECAY)
@@ -710,7 +779,7 @@ def main():
         f"  - Scheduler: ReduceLROnPlateau (patience={scheduler_patience}, "
         f"factor={scheduler_factor})"
     )
-    logger.info(f"  - Loss: Weighted cross-entropy")
+    logger.info(f"  - Loss: {loss_desc}")
 
     # Training loop
     logger.info("\n" + "=" * 80)
@@ -862,7 +931,9 @@ def main():
             'split_source': split_metadata['source'],
             'split_manifest_loaded': split_metadata['source_manifest_path'],
             'split_manifest_written': split_metadata['written_manifest_paths'],
-            'dropout': config.LSTM_DROPOUT
+            'dropout': config.LSTM_DROPOUT,
+            'loss_type': 'focal' if focal_loss_gamma is not None else 'cross_entropy',
+            'focal_loss_gamma': focal_loss_gamma
         },
         'data_info': {
             'label_file': label_path,
@@ -977,6 +1048,9 @@ def main():
         f.write(f"  Loaded Split Manifest: {split_metadata['source_manifest_path']}\n")
         f.write(f"  Written Split Manifest(s): {', '.join(split_metadata['written_manifest_paths'])}\n")
         f.write(f"  Dropout: {config.LSTM_DROPOUT}\n")
+        f.write(f"  Loss Type: {'focal' if focal_loss_gamma is not None else 'cross_entropy'}\n")
+        if focal_loss_gamma is not None:
+            f.write(f"  Focal Loss Gamma: {focal_loss_gamma}\n")
         f.write("\n")
         f.write("=" * 80 + "\n\n")
         f.write(report)

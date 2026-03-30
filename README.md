@@ -1,5 +1,50 @@
 # Mobility Pattern Classification Project
 
+## Current Focus
+
+The project is currently focused on **fast SGH-region iteration** rather than GBA-region expansion.
+
+### Active experiment line
+- Region: **SGH** (`2021_sgh_week.csv`, `2024_sgh_week.csv`)
+- Current label file: **`data/label_i0.095_d3.0_spc500.csv`**
+  - 4500 samples, 500 per class, balanced
+- Current formal comparison: **Phase40**
+  - **40a baseline**: `TRANSFORMER + GINE + flow_distance_direction + inflow_outflow + raw_temporal_mean + topk20/topk20`
+  - **40b aligned features**: `TRANSFORMER + GINE + flow_distance_direction + total_wamd + flow_wamd + topk20/topk20`
+- Goal: test whether **label-aligned features** improve performance when labels are defined by:
+  - **growth / decline / stable** from node flow magnitude
+  - **aggregation / diffusion / balanced** from weighted average movement distance (WAMD)
+
+### Current modeling direction
+The main design shift is to align model inputs with the label construction logic.
+
+1. **Temporal branch input**
+   - Current new candidate: `(168, 2) = [totalflow_log, wamd]`
+   - Hourly uses hourly total flow + hourly WAMD
+   - Daily uses daily total flow + flow-weighted daily WAMD
+   - Weekly uses weekly total flow + weekly WAMD
+
+2. **Spatial branch input**
+   - Keep **edge-level real distance / direction** information in GINE edge attributes
+   - Also provide **node-level total flow + node-level WAMD** as spatial node features
+   - Current new node feature mode: `flow_wamd`
+
+3. **Why this matters**
+   - Old feature set was convenient but only partially aligned with the label semantics
+   - New feature set is intended to reduce mismatch between:
+     - how labels are generated
+     - what the temporal/spatial branches are asked to learn
+
+### Current best validated baselines
+- **Controlled frozen protocol best single-run**: `TRANSFORMER + GINE + flow_distribution` with macro F1 edge over prior baselines
+- **Historical Phase31 headline**: `TRANSFORMER + GINE + flow_distance_direction = 73.56 / 0.7304` (not frozen, keep as historical reference)
+- **Current work is not trying to beat GBA**; GBA is temporarily deprioritized because it is slower to iterate and substantially harder.
+
+### Workflow notes
+- Do **not** repeatedly poll long-running training jobs; launch them and check only when needed.
+- Keep experiment names and output folders traceable.
+- Record every formal phase in `PHASE_EXPERIMENT_TRACKER.md`.
+
 ## Overview
 
 This project implements a deep spatiotemporal model for classifying 9 types of mobility change patterns in the Pearl River Delta (PRD) region using 2021 and 2024 OD flow data.

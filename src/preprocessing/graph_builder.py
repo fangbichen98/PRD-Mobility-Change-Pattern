@@ -74,26 +74,15 @@ class SpatialGraphBuilder:
             num_edges = edge_index.shape[1]
             if num_edges == 0:
                 return np.zeros((0, 3), dtype=np.float32)
-
-            src_nodes = edge_index[0]
-            eps = 1e-8
-
-            # Per-source-node total outflow via vectorized bincount
-            node_total_outflow = np.bincount(
-                src_nodes,
-                weights=edge_weights,
-                minlength=int(src_nodes.max()) + 1,
-            )
-            src_outflow = node_total_outflow[src_nodes]  # (E,)
-
-            # Flow share (probability used in entropy calculation)
-            p_ij = (edge_weights / (src_outflow + eps)).astype(np.float32)
-
-            # Information content (entropy component: -log p)
-            info_ij = (-np.log(p_ij + eps)).astype(np.float32)
-
-            # Return [raw_flow, p_ij, info_ij]; model-side applies log1p to flow
-            return np.stack([edge_weights, p_ij, info_ij], axis=1)  # (E, 3)
+            src = edge_index[0]
+            total_outflow = np.zeros(int(src.max()) + 1, dtype=np.float64)
+            np.add.at(total_outflow, src, edge_weights.astype(np.float64))
+            src_total = total_outflow[src]
+            safe_total = np.where(src_total > 0, src_total, 1.0)
+            p_ij = (edge_weights / safe_total).astype(np.float32)
+            safe_p = np.clip(p_ij, 1e-9, 1.0)
+            info_ij = np.clip(-np.log(safe_p), 0.0, 10.0).astype(np.float32)
+            return np.stack([edge_weights, p_ij, info_ij], axis=1)
 
         if mode != 'flow_distance_direction':
             raise ValueError(f"Unsupported edge feature mode: {mode}")

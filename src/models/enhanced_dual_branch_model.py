@@ -97,12 +97,12 @@ class EnhancedDualBranchModel(nn.Module):
 
         if self.spatial_node_feature_mode not in {
             'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d',
-            'raw_temporal_mean', 'raw_temporal_graph_stats'
+            'raw_temporal_mean', 'raw_temporal_graph_stats', 'flow_wamd'
         }:
             raise ValueError(
                 f"Unsupported SPATIAL_NODE_FEATURE_MODE={self.spatial_node_feature_mode}. "
                 "Use 'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', "
-                "'raw_temporal_mean', or 'raw_temporal_graph_stats'."
+                "'raw_temporal_mean', 'raw_temporal_graph_stats', or 'flow_wamd'."
             )
 
         if self.temporal_model not in {'LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', 'BIGRU'}:
@@ -113,20 +113,24 @@ class EnhancedDualBranchModel(nn.Module):
 
         if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
             spatial_input_size = self.RAW_TEMPORAL_GRAPH_STATS_DIM
-        elif self.spatial_node_feature_mode in {'temporal_mean', 'annual_daily_mean_2d', 'raw_temporal_mean'}:
+        elif self.spatial_node_feature_mode in {
+            'temporal_mean', 'annual_daily_mean_2d', 'raw_temporal_mean', 'flow_wamd'
+        }:
             spatial_input_size = temporal_input_size
         else:
             # ones / annual_daily_mean both feed 1-dim node feature to spatial branch.
             spatial_input_size = 1
 
         # Temporal branch: Multi-scale processing
+        daily_agg_mode = 'wamd' if getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow') == 'total_wamd' else 'sum'
         if self.temporal_model == 'GRU':
             self.temporal_branch = SimplifiedMultiScaleTemporalGRU(
                 input_size=temporal_input_size,
                 hidden_size=hidden_size,
                 gru_hidden=config.LSTM_HIDDEN_SIZE,
                 gru_layers=config.LSTM_LAYERS,
-                dropout=dropout
+                dropout=dropout,
+                daily_agg_mode=daily_agg_mode
             )
         elif self.temporal_model == 'TCN':
             self.temporal_branch = SimplifiedMultiScaleTemporalTCN(
@@ -134,7 +138,8 @@ class EnhancedDualBranchModel(nn.Module):
                 hidden_size=hidden_size,
                 tcn_hidden=config.LSTM_HIDDEN_SIZE,
                 tcn_layers=config.LSTM_LAYERS,
-                dropout=dropout
+                dropout=dropout,
+                daily_agg_mode=daily_agg_mode
             )
         elif self.temporal_model == 'TRANSFORMER':
             self.temporal_branch = SimplifiedMultiScaleTemporalTransformer(
@@ -142,7 +147,8 @@ class EnhancedDualBranchModel(nn.Module):
                 hidden_size=hidden_size,
                 model_dim=config.LSTM_HIDDEN_SIZE,
                 num_layers=config.LSTM_LAYERS,
-                dropout=dropout
+                dropout=dropout,
+                daily_agg_mode=daily_agg_mode
             )
         elif self.temporal_model == 'TRANSFORMER_FULL':
             self.temporal_branch = FullMultiScaleTemporalTransformer(
@@ -153,7 +159,8 @@ class EnhancedDualBranchModel(nn.Module):
                 daily_layers=getattr(config, 'TRANSFORMER_FULL_DAILY_LAYERS', 3),
                 nhead=getattr(config, 'TRANSFORMER_FULL_HEADS', 8),
                 ff_multiplier=getattr(config, 'TRANSFORMER_FULL_FF_MULTIPLIER', 4),
-                dropout=dropout
+                dropout=dropout,
+                daily_agg_mode=daily_agg_mode
             )
         elif self.temporal_model == 'BIGRU':
             self.temporal_branch = SimplifiedMultiScaleTemporalBiGRU(
@@ -161,7 +168,8 @@ class EnhancedDualBranchModel(nn.Module):
                 hidden_size=hidden_size,
                 gru_hidden=config.LSTM_HIDDEN_SIZE,
                 gru_layers=config.LSTM_LAYERS,
-                dropout=dropout
+                dropout=dropout,
+                daily_agg_mode=daily_agg_mode
             )
         else:
             self.temporal_branch = SimplifiedMultiScaleTemporal(
@@ -169,7 +177,8 @@ class EnhancedDualBranchModel(nn.Module):
                 hidden_size=hidden_size,
                 lstm_hidden=config.LSTM_HIDDEN_SIZE,
                 lstm_layers=config.LSTM_LAYERS,
-                dropout=dropout
+                dropout=dropout,
+                daily_agg_mode=daily_agg_mode
             )
 
         # Spatial branch: Choose model type
@@ -182,10 +191,17 @@ class EnhancedDualBranchModel(nn.Module):
 
         if spatial_model == "GINE":
             gine_edge_feature_mode = getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
-            edge_dim = 4 if gine_edge_feature_mode == 'flow_distance_direction' else 1
+            if gine_edge_feature_mode == 'flow_distance_direction':
+                edge_dim = 4
+            elif gine_edge_feature_mode == 'flow_distribution':
+                edge_dim = 3
+            else:
+                edge_dim = 1
             gine_input_size = config.LAPLACIAN_PE_DIM
             if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
                 gine_input_size += self.RAW_TEMPORAL_GRAPH_STATS_DIM
+            if self.spatial_node_feature_mode == 'flow_wamd':
+                gine_input_size += 2  # [total_w_log, wamd_w_log]
             if self.gine_use_spatial_coords:
                 gine_input_size += 2  # normalized (lon, lat)
             self.spatial_branch = PureGraphDualYearGINE(
@@ -264,15 +280,21 @@ class EnhancedDualBranchModel(nn.Module):
         )
 
     def register_node_coords(self, node_coords: torch.Tensor):
-        """Register normalized spatial coordinates as a buffer for GINE node features.
-
-        Args:
-            node_coords: (num_nodes, 2) tensor of [lon, lat] coordinates.
-        """
+        """Register normalized spatial coordinates as a buffer for GINE node features."""
         mean = node_coords.mean(dim=0, keepdim=True)
         std = node_coords.std(dim=0, keepdim=True).clamp_min(1e-6)
         normalized = (node_coords - mean) / std
         self.register_buffer('_node_coords', normalized)
+
+    def register_wamd_node_features(self, wamd_2021: torch.Tensor, wamd_2024: torch.Tensor):
+        """Register precomputed wamd node features as log-transformed buffers.
+
+        Args:
+            wamd_2021: (num_nodes, 2) raw [total_w, wamd_w] for 2021
+            wamd_2024: (num_nodes, 2) raw [total_w, wamd_w] for 2024
+        """
+        self.register_buffer('_wamd_node_features_2021', torch.log1p(wamd_2021))
+        self.register_buffer('_wamd_node_features_2024', torch.log1p(wamd_2024))
 
     @staticmethod
     def _mode_requires_raw_temporal(node_feature_mode: str) -> bool:
@@ -367,6 +389,11 @@ class EnhancedDualBranchModel(nn.Module):
         elif self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
             spatial_node_features_2021 = self._compute_raw_temporal_graph_stats(raw_x_2021, graphs_2021, num_nodes)
             spatial_node_features_2024 = self._compute_raw_temporal_graph_stats(raw_x_2024, graphs_2024, num_nodes)
+        elif self.spatial_node_feature_mode == 'flow_wamd':
+            if not hasattr(self, '_wamd_node_features_2021'):
+                raise ValueError("flow_wamd mode requires register_wamd_node_features() to be called first")
+            spatial_node_features_2021 = self._wamd_node_features_2021
+            spatial_node_features_2024 = self._wamd_node_features_2024
 
         return spatial_node_features_2021, spatial_node_features_2024
 
@@ -381,6 +408,11 @@ class EnhancedDualBranchModel(nn.Module):
             raw_graph_stats_2024 = self._compute_raw_temporal_graph_stats(raw_x_2024, graphs_2024, num_nodes)
             features_2021 = torch.cat([features_2021, raw_graph_stats_2021], dim=1)
             features_2024 = torch.cat([features_2024, raw_graph_stats_2024], dim=1)
+        elif self.spatial_node_feature_mode == 'flow_wamd':
+            if not hasattr(self, '_wamd_node_features_2021'):
+                raise ValueError("flow_wamd mode requires register_wamd_node_features() to be called first")
+            features_2021 = torch.cat([features_2021, self._wamd_node_features_2021.to(device)], dim=1)
+            features_2024 = torch.cat([features_2024, self._wamd_node_features_2024.to(device)], dim=1)
 
         if self.gine_use_spatial_coords and hasattr(self, '_node_coords'):
             coords = self._node_coords.to(device)

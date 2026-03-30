@@ -12,10 +12,10 @@ import os
 # ==============================================================================
 # These paths are used by dual_year_processor.py (called by train_multiscale_temporal.py)
 DATA_DIR = "data"
-OD_2021_PATH = os.path.join(DATA_DIR, "2021_gba_week.csv")
-OD_2024_PATH = os.path.join(DATA_DIR, "2024_gba_week.csv")
-GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "PRD_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "labels_gba_entropy_1200_per_class.csv")
+OD_2021_PATH = os.path.join(DATA_DIR, "2021_sgh_week.csv")
+OD_2024_PATH = os.path.join(DATA_DIR, "2024_sgh_week.csv")
+GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "sgh_grid_metadata.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "label_i0.095_d3.0_spc500.csv")
 
 # ==============================================================================
 # DATA PREPROCESSING
@@ -81,7 +81,13 @@ LAPLACIAN_PE_DIM = 16        # Laplacian Positional Encoding dimension (for GINE
 # GINE edge feature mode:
 # - "flow_only": scalar edge weight only (legacy behavior)
 # - "flow_distance_direction": 4-dim edge attr [flow, normalized_distance, cos(theta), sin(theta)]
+# - "flow_distribution": 3-dim edge attr [flow, p_ij, info_ij]
 GINE_EDGE_FEATURE_MODE = "flow_distance_direction"
+# Temporal feature mode (controls what (168,2) sequence is fed to temporal branch):
+# - "inflow_outflow": [log(1+inflow), log(1+outflow)] per hour (legacy default)
+# - "total_wamd":     [log(1+total_flow), log(1+wamd)] per hour, where
+#                     wamd = weighted-average OD distance (km) using flow as weight
+TEMPORAL_FEATURE_MODE = "inflow_outflow"
 # Spatial node feature mode for non-GINE branches:
 # - "ones": featureless all-1 node input (default)
 # - "temporal_mean": use per-node mean over 168x2 temporal sequence as node features
@@ -90,6 +96,7 @@ GINE_EDGE_FEATURE_MODE = "flow_distance_direction"
 # - "raw_temporal_mean": use per-node mean over raw 168x2 inflow/outflow (no log)
 # - "raw_temporal_graph_stats": use raw flow stats + graph structural stats as node features;
 #   for GINE this is concatenated with Laplacian PE
+# - "flow_wamd": [log(1+total_w), log(1+wamd_w)] per node per year (aligns with total_wamd temporal mode)
 SPATIAL_NODE_FEATURE_MODE = "raw_temporal_mean"
 # Whether to concatenate normalized (lon, lat) spatial coordinates into GINE node features.
 # Only effective when SPATIAL_MODEL="GINE". Adds 2 extra input dimensions alongside Laplacian PE.

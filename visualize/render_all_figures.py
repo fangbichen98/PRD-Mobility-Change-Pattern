@@ -132,11 +132,13 @@ def main() -> None:
 
     # --- Evaluation figures (only need metrics/) ---
     print('Rendering evaluation figures...')
+    vis_output_dir = Path(__file__).resolve().parent / 'output' / 'phase41c'
+    vis_output_dir.mkdir(parents=True, exist_ok=True)
     plot_classification_performance.plot_classification_performance(
         METRICS_DIR / 'classification_report.txt',
-        METRICS_DIR,
+        vis_output_dir,
     )
-    plot_confusion_matrix.plot_confusion_matrix(METRICS_DIR)
+    plot_confusion_matrix.plot_confusion_matrix(METRICS_DIR, vis_output_dir)
 
     print('All figures rendered successfully.')
 

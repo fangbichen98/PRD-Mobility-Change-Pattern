@@ -570,13 +570,23 @@ def load_model(model_path, device, manifest: dict = None):
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-    if 'model_state_dict' in checkpoint:
-        missing, unexpected = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-    else:
-        missing, unexpected = model.load_state_dict(checkpoint, strict=False)
+    sd = checkpoint.get('model_state_dict', checkpoint)
+
+    # Restore buffer keys that strict=False would silently drop.
+    # _node_coords is saved in the checkpoint but not pre-registered on the
+    # freshly-constructed model, so load_state_dict marks it as "unexpected"
+    # and discards it — causing a 16-vs-18 dim mismatch at inference time.
+    for buf_key in ('_node_coords', '_wamd_node_features_2021', '_wamd_node_features_2024'):
+        if buf_key in sd:
+            model.register_buffer(buf_key, sd[buf_key].to(device))
+            print(f"  Restored buffer: {buf_key} {tuple(sd[buf_key].shape)}")
+
+    missing, unexpected = model.load_state_dict(sd, strict=False)
 
     if missing:
         print(f"  WARNING: {len(missing)} missing keys in checkpoint")
+    # Filter out the buffers we already restored so the count is accurate
+    unexpected = [k for k in unexpected if k not in ('_node_coords', '_wamd_node_features_2021', '_wamd_node_features_2024')]
     if unexpected:
         print(f"  WARNING: {len(unexpected)} unexpected keys in checkpoint")
 
@@ -1229,6 +1239,12 @@ def save_predictions(pred_df, output_dir):
 
 def main():
     """Main function"""
+    # For full-grid inference, always use all cached raw features (not just training-flow grids).
+    # This prevents the spatial branch from receiving all-zero node features for non-training grids,
+    # which would cause prediction collapse to a single class.
+    if not os.environ.get('SPATIAL_RAW_MASK_MODE'):
+        os.environ['SPATIAL_RAW_MASK_MODE'] = 'all'
+
     # Configuration
     cache_path = os.environ.get(
         'VIS_CACHE_PATH',

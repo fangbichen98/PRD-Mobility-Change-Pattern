@@ -14,6 +14,28 @@ import torch
 import torch.nn as nn
 
 
+def _aggregate_daily_wamd(x: torch.Tensor) -> torch.Tensor:
+    """
+    Aggregate hourly [total_h, wamd_h] to daily [total_d, wamd_d].
+
+    total_d = sum of hourly totals over 24h
+    wamd_d  = flow-weighted average of hourly wamd values
+              = Σ(total_h * wamd_h) / Σ(total_h)
+
+    Args:
+        x: (batch, 168, 2) where x[:,:,0]=total_h, x[:,:,1]=wamd_h
+    Returns:
+        (batch, 7, 2)
+    """
+    b = x.size(0)
+    x_r = x.view(b, 7, 24, 2)
+    total_h = x_r[:, :, :, 0]                                          # (b, 7, 24)
+    wamd_h  = x_r[:, :, :, 1]                                          # (b, 7, 24)
+    total_d = total_h.sum(dim=2)                                        # (b, 7)
+    wamd_d  = (total_h * wamd_h).sum(dim=2) / total_d.clamp_min(1e-6)  # (b, 7)
+    return torch.stack([total_d, wamd_d], dim=2)                        # (b, 7, 2)
+
+
 class MultiScaleTemporalBranch(nn.Module):
     """
     Multi-scale temporal processing branch.
@@ -222,8 +244,9 @@ class SimplifiedMultiScaleTemporal(nn.Module):
     - Fewer parameters
     """
 
-    def __init__(self, input_size=1, hidden_size=256, lstm_hidden=128, lstm_layers=2, dropout=0.4):
+    def __init__(self, input_size=1, hidden_size=256, lstm_hidden=128, lstm_layers=2, dropout=0.4, daily_agg_mode='sum'):
         super().__init__()
+        self.daily_agg_mode = daily_agg_mode
 
         # FIX: Separate LSTMs for different scales to avoid sequence length mismatch
         self.lstm_hourly = nn.LSTM(
@@ -278,7 +301,10 @@ class SimplifiedMultiScaleTemporal(nn.Module):
             h_hourly = self.proj_hourly(h_hourly_n[-1])
 
             # Process daily (sum over 24 hours for true daily flow) with dedicated LSTM
-            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
+            if self.daily_agg_mode == 'wamd':
+                x_daily = _aggregate_daily_wamd(x)
+            else:
+                x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
             _, (h_daily_n, _) = self.lstm_daily(x_daily)
             h_daily = self.proj_daily(h_daily_n[-1])
 
@@ -308,7 +334,10 @@ class SimplifiedMultiScaleTemporal(nn.Module):
         _, (h_hourly_n, _) = self.lstm_hourly(x)
         h_hourly = self.proj_hourly(h_hourly_n[-1])
 
-        x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
+        if self.daily_agg_mode == 'wamd':
+            x_daily = _aggregate_daily_wamd(x)
+        else:
+            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
         _, (h_daily_n, _) = self.lstm_daily(x_daily)
         h_daily = self.proj_daily(h_daily_n[-1])
 
@@ -326,8 +355,9 @@ class SimplifiedMultiScaleTemporal(nn.Module):
 class SimplifiedMultiScaleTemporalGRU(nn.Module):
     """GRU variant of the simplified multi-scale temporal branch."""
 
-    def __init__(self, input_size=1, hidden_size=256, gru_hidden=128, gru_layers=2, dropout=0.4):
+    def __init__(self, input_size=1, hidden_size=256, gru_hidden=128, gru_layers=2, dropout=0.4, daily_agg_mode='sum'):
         super().__init__()
+        self.daily_agg_mode = daily_agg_mode
 
         self.gru_hourly = nn.GRU(
             input_size=input_size,
@@ -366,7 +396,10 @@ class SimplifiedMultiScaleTemporalGRU(nn.Module):
         _, h_hourly_n = self.gru_hourly(x)
         h_hourly = self.proj_hourly(h_hourly_n[-1])
 
-        x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
+        if self.daily_agg_mode == 'wamd':
+            x_daily = _aggregate_daily_wamd(x)
+        else:
+            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
         _, h_daily_n = self.gru_daily(x_daily)
         h_daily = self.proj_daily(h_daily_n[-1])
 
@@ -429,8 +462,9 @@ class _TemporalConvBlock(nn.Module):
 class SimplifiedMultiScaleTemporalTCN(nn.Module):
     """TCN variant of the simplified multi-scale temporal branch."""
 
-    def __init__(self, input_size=1, hidden_size=256, tcn_hidden=128, tcn_layers=3, dropout=0.4):
+    def __init__(self, input_size=1, hidden_size=256, tcn_hidden=128, tcn_layers=3, dropout=0.4, daily_agg_mode='sum'):
         super().__init__()
+        self.daily_agg_mode = daily_agg_mode
 
         self.hourly_in = nn.Sequential(
             nn.Conv1d(input_size, tcn_hidden, kernel_size=1),
@@ -471,7 +505,14 @@ class SimplifiedMultiScaleTemporalTCN(nn.Module):
         h_hourly = self.hourly_tcn(self.hourly_in(x_h)).mean(dim=2)
         h_hourly = self.proj_hourly(h_hourly)
 
-        x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2).transpose(1, 2)
+        if self.daily_agg_mode == 'wamd':
+            x_daily = _aggregate_daily_wamd(x)
+        else:
+            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2).transpose(1, 2)
+        if self.daily_agg_mode != 'wamd':
+            pass  # already transposed above
+        else:
+            x_daily = x_daily.transpose(1, 2)
         h_daily = self.daily_tcn(self.daily_in(x_daily)).mean(dim=2)
         h_daily = self.proj_daily(h_daily)
 
@@ -497,8 +538,9 @@ class SimplifiedMultiScaleTemporalTCN(nn.Module):
 class SimplifiedMultiScaleTemporalTransformer(nn.Module):
     """Lightweight Transformer variant of the simplified multi-scale temporal branch."""
 
-    def __init__(self, input_size=1, hidden_size=256, model_dim=128, num_layers=2, dropout=0.4):
+    def __init__(self, input_size=1, hidden_size=256, model_dim=128, num_layers=2, dropout=0.4, daily_agg_mode='sum'):
         super().__init__()
+        self.daily_agg_mode = daily_agg_mode
 
         self.in_proj_hourly = nn.Linear(input_size, model_dim)
         self.in_proj_daily = nn.Linear(input_size, model_dim)
@@ -546,7 +588,10 @@ class SimplifiedMultiScaleTemporalTransformer(nn.Module):
         h_hourly = self.hourly_encoder(x_hourly).mean(dim=1)
         h_hourly = self.proj_hourly(h_hourly)
 
-        x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
+        if self.daily_agg_mode == 'wamd':
+            x_daily = _aggregate_daily_wamd(x)
+        else:
+            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
         x_daily = self.pos_daily(self.in_proj_daily(x_daily))
         h_daily = self.daily_encoder(x_daily).mean(dim=1)
         h_daily = self.proj_daily(h_daily)
@@ -573,8 +618,9 @@ class SimplifiedMultiScaleTemporalTransformer(nn.Module):
 class SimplifiedMultiScaleTemporalBiGRU(nn.Module):
     """Bidirectional GRU variant of the simplified multi-scale temporal branch."""
 
-    def __init__(self, input_size=1, hidden_size=256, gru_hidden=128, gru_layers=2, dropout=0.4):
+    def __init__(self, input_size=1, hidden_size=256, gru_hidden=128, gru_layers=2, dropout=0.4, daily_agg_mode='sum'):
         super().__init__()
+        self.daily_agg_mode = daily_agg_mode
 
         self.gru_hourly = nn.GRU(
             input_size=input_size,
@@ -621,7 +667,10 @@ class SimplifiedMultiScaleTemporalBiGRU(nn.Module):
         _, h_hourly_n = self.gru_hourly(x)
         h_hourly = self.proj_hourly(self._last_bidirectional(h_hourly_n))
 
-        x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
+        if self.daily_agg_mode == 'wamd':
+            x_daily = _aggregate_daily_wamd(x)
+        else:
+            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
         _, h_daily_n = self.gru_daily(x_daily)
         h_daily = self.proj_daily(self._last_bidirectional(h_daily_n))
 
@@ -657,8 +706,10 @@ class FullMultiScaleTemporalTransformer(nn.Module):
         nhead=8,
         ff_multiplier=4,
         dropout=0.3,
+        daily_agg_mode='sum',
     ):
         super().__init__()
+        self.daily_agg_mode = daily_agg_mode
 
         if model_dim % nhead != 0:
             raise ValueError(f"model_dim={model_dim} must be divisible by nhead={nhead}")
@@ -740,7 +791,10 @@ class FullMultiScaleTemporalTransformer(nn.Module):
         )
         h_hourly = self.hourly_readout(h_hourly)
 
-        x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
+        if self.daily_agg_mode == 'wamd':
+            x_daily = _aggregate_daily_wamd(x)
+        else:
+            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
         h_daily = self._encode_with_cls(
             x_daily,
             self.in_proj_daily,
