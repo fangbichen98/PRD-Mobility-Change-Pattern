@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, SAGEConv, GraphConv, GATConv
+from torch_geometric.nn import MessagePassing
 from typing import List, Optional, Tuple
 import logging
 
@@ -717,6 +718,129 @@ class PureGraphDualYearGAT(nn.Module):
             h_2021 = h_2021[node_indices]
             h_2024 = h_2024[node_indices]
             diff = diff[node_indices]
+
+        return h_2021, h_2024, diff
+
+
+class MPNNConv(MessagePassing):
+    """
+    Single MPNN layer: message = MLP(h_i || h_j || e_ij), update = MLP(h_i + agg).
+    Supports multi-dim edge features (e.g. flow_distance_direction, 4-dim).
+    """
+    def __init__(self, in_channels: int, out_channels: int, edge_dim: int = 1):
+        super().__init__(aggr="add")
+        msg_in = in_channels * 2 + edge_dim
+        self.msg_mlp = nn.Sequential(
+            nn.Linear(msg_in, out_channels),
+            nn.ReLU(),
+            nn.Linear(out_channels, out_channels),
+        )
+        self.update_mlp = nn.Sequential(
+            nn.Linear(in_channels + out_channels, out_channels),
+            nn.ReLU(),
+        )
+
+    def forward(self, x, edge_index, edge_attr):
+        # edge_attr: (E,) or (E, edge_dim)
+        if edge_attr.dim() == 1:
+            edge_attr = edge_attr.unsqueeze(-1)
+        return self.propagate(edge_index, x=x, edge_attr=edge_attr)
+
+    def message(self, x_i, x_j, edge_attr):
+        return self.msg_mlp(torch.cat([x_i, x_j, edge_attr], dim=-1))
+
+    def update(self, aggr_out, x):
+        return self.update_mlp(torch.cat([x, aggr_out], dim=-1))
+
+
+class PureGraphDualYearMPNN(nn.Module):
+    """
+    MPNN spatial branch with explicit message/update MLPs and edge features.
+    Follows the same dual-year + cache pattern as other spatial branches.
+    """
+
+    def __init__(self,
+                 input_size: int = 1,
+                 hidden_size: int = 128,
+                 num_layers: int = 3,
+                 dropout: float = 0.2,
+                 output_size: int = 256,
+                 edge_dim: int = 4):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout_rate = dropout
+        self.output_size = output_size
+        self.edge_dim = edge_dim
+
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
+        self.layers = nn.ModuleList()
+        for i in range(num_layers):
+            in_ch = input_size if i == 0 else hidden_size
+            self.layers.append(MPNNConv(in_ch, hidden_size, edge_dim))
+
+        self.output_proj = nn.Linear(hidden_size, output_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def process_year(self, edge_index, edge_attr, num_nodes,
+                     node_features: Optional[torch.Tensor] = None):
+        if node_features is None:
+            x = torch.ones((num_nodes, self.input_size),
+                           device=edge_index.device, dtype=torch.float32)
+        else:
+            x = node_features.float()
+
+        if edge_index.dtype != torch.long:
+            edge_index = edge_index.long()
+
+        ea = edge_attr.float()
+        if ea.dim() == 1:
+            ea = ea.unsqueeze(-1)
+        # log-transform flow channel
+        ea = ea.clone()
+        ea[:, 0] = torch.log1p(ea[:, 0].clamp(min=0.0))
+
+        h = x
+        for layer in self.layers:
+            h = layer(h, edge_index, ea)
+            h = self.dropout(h)
+
+        return self.output_proj(h)
+
+    def clear_cache(self):
+        self._cached_2021 = None
+        self._cached_2024 = None
+        self._cache_valid = False
+
+    def forward(self, graphs_2021, graphs_2024, num_nodes, node_indices=None,
+                node_features_2021: Optional[torch.Tensor] = None,
+                node_features_2024: Optional[torch.Tensor] = None):
+        edge_index_2021, edge_attr_2021 = graphs_2021[0]
+        edge_index_2024, edge_attr_2024 = graphs_2024[0]
+
+        if self.training or not self._cache_valid:
+            h_2021 = self.process_year(edge_index_2021, edge_attr_2021,
+                                       num_nodes, node_features_2021)
+            h_2024 = self.process_year(edge_index_2024, edge_attr_2024,
+                                       num_nodes, node_features_2024)
+            if not self.training:
+                self._cached_2021 = h_2021.detach()
+                self._cached_2024 = h_2024.detach()
+                self._cache_valid = True
+        else:
+            h_2021 = self._cached_2021
+            h_2024 = self._cached_2024
+
+        diff = h_2024 - h_2021
+
+        if node_indices is not None:
+            h_2021 = h_2021[node_indices]
+            h_2024 = h_2024[node_indices]
+            diff   = diff[node_indices]
 
         return h_2021, h_2024, diff
 

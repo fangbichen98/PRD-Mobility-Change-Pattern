@@ -245,50 +245,79 @@ class PureGraphDualYearGINE(nn.Module):
 
 def compute_laplacian_pe(edge_index, edge_weight, num_nodes, k=16, device='cuda'):
     """
-    Compute Laplacian Positional Encoding for graph nodes
+    Compute Laplacian Positional Encoding for graph nodes.
+
+    Uses shift-invert mode (sigma=1e-10) which is numerically stable for large
+    sparse graphs, unlike the default which='SM' mode.
 
     Args:
         edge_index: Edge connectivity (2, num_edges)
         edge_weight: Edge weights (num_edges,)
         num_nodes: Number of nodes
-        k: Number of eigenvectors to use (PE dimension)
+        k: Number of eigenvectors to use (PE dimension); 0 = return empty tensor
         device: Device to compute on
 
     Returns:
         pe: Laplacian PE (num_nodes, k)
     """
-    try:
-        from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix
-        from scipy.sparse.linalg import eigsh
-        import numpy as np
+    # k=0 means PE is disabled — return empty tensor directly
+    if k == 0:
+        return torch.zeros(num_nodes, 0, device=device)
 
-        # Get normalized Laplacian
-        edge_index_lap, edge_weight_lap = get_laplacian(
-            edge_index,
-            edge_weight,
-            normalization='sym',
-            num_nodes=num_nodes
+    try:
+        import numpy as np
+        import scipy.sparse as sp
+        from scipy.sparse.linalg import eigsh
+        from torch_geometric.utils import get_laplacian
+
+        # Extract scalar flow weight: if edge_weight is 2-D (e.g. (E, 4) for
+        # flow_distance_direction mode), use only the first column (flow).
+        ew = edge_weight.float()
+        if ew.dim() > 1:
+            ew = ew[:, 0]
+        ew = ew.reshape(-1)  # ensure 1-D
+        ew = torch.nan_to_num(ew, nan=0.0, posinf=1.0, neginf=0.0)
+        ew = ew.clamp(min=0.0)
+
+        # Build normalized Laplacian via PyG
+        ei_lap, ew_lap = get_laplacian(
+            edge_index, ew, normalization='sym', num_nodes=num_nodes
         )
 
-        # Convert to scipy sparse matrix
-        L = to_scipy_sparse_matrix(edge_index_lap, edge_weight_lap, num_nodes)
+        # Convert to scipy CSR sparse matrix (compatible with all PyG versions)
+        row = ei_lap[0].cpu().numpy()
+        col = ei_lap[1].cpu().numpy()
+        val = ew_lap.cpu().numpy().astype(np.float64)
+        L = sp.csr_matrix((val, (row, col)), shape=(num_nodes, num_nodes))
 
-        # Compute k smallest eigenvectors (excluding the trivial one)
-        # Use k+1 because the first eigenvector is constant (trivial)
+        k_req = min(k + 1, num_nodes - 2)
+
+        # Attempt 1: shift-invert mode — stable and fast for small eigenvalues
         try:
-            eigenvalues, eigenvectors = eigsh(L, k=min(k+1, num_nodes-2), which='SM')
-        except:
-            # Fallback: if eigsh fails, use random features
-            logger.warning(f"Laplacian eigsh failed, using random PE")
-            pe = torch.randn(num_nodes, k, device=device)
-            return pe
+            eigenvalues, eigenvectors = eigsh(
+                L, k=k_req, which='LM', sigma=1e-10,
+                tol=1e-4, maxiter=num_nodes * 5
+            )
+        except Exception as e1:
+            logger.warning(f"Laplacian eigsh (shift-invert) failed: {e1}. Trying SM mode.")
+            # Attempt 2: standard SM mode as fallback
+            try:
+                eigenvalues, eigenvectors = eigsh(
+                    L, k=k_req, which='SM', tol=1e-4
+                )
+            except Exception as e2:
+                logger.warning(f"Laplacian eigsh (SM) also failed: {e2}. Using random PE.")
+                return torch.randn(num_nodes, k, device=device)
 
-        # Take k eigenvectors (skip the first trivial one)
-        pe = torch.from_numpy(eigenvectors[:, 1:k+1]).float().to(device)
+        # Sort by ascending eigenvalue and skip the trivial near-zero eigenvector
+        sort_idx = np.argsort(eigenvalues)
+        eigenvectors = eigenvectors[:, sort_idx]
+        pe_np = eigenvectors[:, 1:k + 1].copy()  # skip index 0 (trivial)
 
-        # Handle case where we got fewer eigenvectors than requested
+        pe = torch.from_numpy(pe_np).float().to(device)
+
+        # Pad with zeros if fewer eigenvectors were returned than requested
         if pe.shape[1] < k:
-            # Pad with zeros
             padding = torch.zeros(num_nodes, k - pe.shape[1], device=device)
             pe = torch.cat([pe, padding], dim=1)
 
@@ -296,10 +325,8 @@ def compute_laplacian_pe(edge_index, edge_weight, num_nodes, k=16, device='cuda'
         return pe
 
     except Exception as e:
-        logger.error(f"Error computing Laplacian PE: {e}")
-        # Fallback to random features
-        pe = torch.randn(num_nodes, k, device=device)
-        return pe
+        logger.error(f"Error computing Laplacian PE: {e}. Using random PE.")
+        return torch.randn(num_nodes, k, device=device)
 
 
 # Test the module

@@ -77,17 +77,24 @@ TRANSFORMER_FULL_FF_MULTIPLIER = 4
 SPATIAL_MODEL = "GINE"        # Options: "GCN", "SAGE", "WGCN", "EVOLVEGCN", "GINE"
 SPATIAL_LAYERS = 2           # Number of spatial layers
 SPATIAL_HIDDEN_SIZE = 128    # Spatial branch hidden units
-LAPLACIAN_PE_DIM = 16        # Laplacian Positional Encoding dimension (for GINE)
+LAPLACIAN_PE_DIM = 8         # Laplacian Positional Encoding dimension (for GINE); reduced from 16
 # GINE edge feature mode:
 # - "flow_only": scalar edge weight only (legacy behavior)
 # - "flow_distance_direction": 4-dim edge attr [flow, normalized_distance, cos(theta), sin(theta)]
 # - "flow_distribution": 3-dim edge attr [flow, p_ij, info_ij]
 GINE_EDGE_FEATURE_MODE = "flow_distance_direction"
-# Temporal feature mode (controls what (168,2) sequence is fed to temporal branch):
-# - "inflow_outflow": [log(1+inflow), log(1+outflow)] per hour (legacy default)
-# - "total_wamd":     [log(1+total_flow), log(1+wamd)] per hour, where
-#                     wamd = weighted-average OD distance (km) using flow as weight
+# Temporal feature mode:
+# - "inflow_outflow"   : (168, 2) = [log(1+inflow), log(1+outflow)]  (legacy default)
+# - "total_wamd"       : (168, 2) = [log(1+total_flow), log(1+wamd)]
+# - "flow_degree_wamd" : (168, 6) = [log(1+flow21), log(1+degree21), log(1+wamd21),
+#                                     log(1+flow24), log(1+degree24), log(1+wamd24)]
+#                        temporal branch receives (168, 3) per year (front/back 3 dims split)
 TEMPORAL_FEATURE_MODE = "inflow_outflow"
+# Daily aggregation mode for flow_degree_wamd temporal feature mode:
+#   "sum"  : flow and degree are summed over 24h per day
+#   "mean" : flow and degree are averaged over 24h per day
+#   wamd is always flow-weighted mean regardless of this setting
+DAILY_AGG_MODE = "sum"
 # Spatial node feature mode for non-GINE branches:
 # - "ones": featureless all-1 node input (default)
 # - "temporal_mean": use per-node mean over 168x2 temporal sequence as node features
@@ -96,7 +103,9 @@ TEMPORAL_FEATURE_MODE = "inflow_outflow"
 # - "raw_temporal_mean": use per-node mean over raw 168x2 inflow/outflow (no log)
 # - "raw_temporal_graph_stats": use raw flow stats + graph structural stats as node features;
 #   for GINE this is concatenated with Laplacian PE
-# - "flow_wamd": [log(1+total_w), log(1+wamd_w)] per node per year (aligns with total_wamd temporal mode)
+# - "flow_wamd": [log(1+total_w), log(1+wamd_w)] per node per year
+# - "flow_degree_wamd": [log(1+flow21), log(1+degree21), log(1+wamd21),
+#                        log(1+flow24), log(1+degree24), log(1+wamd24)] per node (6-dim)
 SPATIAL_NODE_FEATURE_MODE = "raw_temporal_mean"
 # Whether to concatenate normalized (lon, lat) spatial coordinates into GINE node features.
 # Only effective when SPATIAL_MODEL="GINE". Adds 2 extra input dimensions alongside Laplacian PE.

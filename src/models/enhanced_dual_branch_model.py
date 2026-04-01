@@ -15,6 +15,7 @@ from src.models.spatial_branch_pure_graph import (
     PureGraphDualYearWGCN,
     PureGraphDualYearGAT,
     PureGraphDualYearEvolveGCN,
+    PureGraphDualYearMPNN,
 )
 from src.models.spatial_branch_gine import PureGraphDualYearGINE, compute_laplacian_pe
 from src.models.multi_scale_temporal import (
@@ -97,12 +98,14 @@ class EnhancedDualBranchModel(nn.Module):
 
         if self.spatial_node_feature_mode not in {
             'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d',
-            'raw_temporal_mean', 'raw_temporal_graph_stats', 'flow_wamd'
+            'raw_temporal_mean', 'raw_temporal_graph_stats', 'flow_wamd',
+            'flow_degree_wamd', 'flow_wamd_v2'
         }:
             raise ValueError(
                 f"Unsupported SPATIAL_NODE_FEATURE_MODE={self.spatial_node_feature_mode}. "
                 "Use 'ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', "
-                "'raw_temporal_mean', 'raw_temporal_graph_stats', or 'flow_wamd'."
+                "'raw_temporal_mean', 'raw_temporal_graph_stats', 'flow_wamd', "
+                "'flow_degree_wamd', or 'flow_wamd_v2'."
             )
 
         if self.temporal_model not in {'LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', 'BIGRU'}:
@@ -117,12 +120,22 @@ class EnhancedDualBranchModel(nn.Module):
             'temporal_mean', 'annual_daily_mean_2d', 'raw_temporal_mean', 'flow_wamd'
         }:
             spatial_input_size = temporal_input_size
+        elif self.spatial_node_feature_mode == 'flow_degree_wamd':
+            # GINE node features: Laplacian PE (8) + 6-dim fdw stats → handled in _build_gine_node_features
+            # For non-GINE branches, raw_temporal_mean is used with temporal_input_size dims
+            spatial_input_size = temporal_input_size
         else:
             # ones / annual_daily_mean both feed 1-dim node feature to spatial branch.
             spatial_input_size = 1
 
         # Temporal branch: Multi-scale processing
-        daily_agg_mode = 'wamd' if getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow') == 'total_wamd' else 'sum'
+        _tfm = getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')
+        if _tfm == 'total_wamd':
+            daily_agg_mode = 'wamd'
+        elif _tfm == 'flow_degree_wamd':
+            daily_agg_mode = getattr(config, 'DAILY_AGG_MODE', 'sum') + '_fdw'  # 'sum_fdw' or 'mean_fdw'
+        else:
+            daily_agg_mode = 'sum'
         if self.temporal_model == 'GRU':
             self.temporal_branch = SimplifiedMultiScaleTemporalGRU(
                 input_size=temporal_input_size,
@@ -200,10 +213,16 @@ class EnhancedDualBranchModel(nn.Module):
             gine_input_size = config.LAPLACIAN_PE_DIM
             if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
                 gine_input_size += self.RAW_TEMPORAL_GRAPH_STATS_DIM
+            if self.spatial_node_feature_mode == 'raw_temporal_mean':
+                gine_input_size += temporal_input_size
             if self.spatial_node_feature_mode == 'flow_wamd':
-                gine_input_size += 2  # [total_w_log, wamd_w_log]
+                gine_input_size += 2
+            if self.spatial_node_feature_mode == 'flow_degree_wamd':
+                gine_input_size += 6
+            if self.spatial_node_feature_mode == 'flow_wamd_v2':
+                gine_input_size += 4  # [flow21, wamd21, flow24, wamd24] log-transformed
             if self.gine_use_spatial_coords:
-                gine_input_size += 2  # normalized (lon, lat)
+                gine_input_size += 2
             self.spatial_branch = PureGraphDualYearGINE(
                 input_size=gine_input_size,
                 hidden_size=config.SPATIAL_HIDDEN_SIZE,
@@ -216,13 +235,16 @@ class EnhancedDualBranchModel(nn.Module):
             self.laplacian_pe_2021 = None
             self.laplacian_pe_2024 = None
         elif spatial_model == "GAT":
+            _gat_edge_mode = getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
+            _gat_edge_dim = 4 if _gat_edge_mode == 'flow_distance_direction' else (3 if _gat_edge_mode == 'flow_distribution' else 1)
             self.spatial_branch = PureGraphDualYearGAT(
                 input_size=spatial_input_size,
                 hidden_size=config.SPATIAL_HIDDEN_SIZE,
                 num_layers=config.SPATIAL_LAYERS,
                 dropout=dropout,
                 output_size=hidden_size,
-                heads=1
+                heads=1,
+                edge_dim=_gat_edge_dim
             )
             self.use_laplacian_pe = False
         elif spatial_model == "SAGE":
@@ -250,6 +272,18 @@ class EnhancedDualBranchModel(nn.Module):
                 num_layers=config.SPATIAL_LAYERS,
                 dropout=dropout,
                 output_size=hidden_size
+            )
+            self.use_laplacian_pe = False
+        elif spatial_model == "MPNN":
+            _mpnn_edge_mode = getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
+            _mpnn_edge_dim = 4 if _mpnn_edge_mode == 'flow_distance_direction' else (3 if _mpnn_edge_mode == 'flow_distribution' else 1)
+            self.spatial_branch = PureGraphDualYearMPNN(
+                input_size=spatial_input_size,
+                hidden_size=config.SPATIAL_HIDDEN_SIZE,
+                num_layers=config.SPATIAL_LAYERS,
+                dropout=dropout,
+                output_size=hidden_size,
+                edge_dim=_mpnn_edge_dim
             )
             self.use_laplacian_pe = False
         else:  # Default to GCN
@@ -295,6 +329,21 @@ class EnhancedDualBranchModel(nn.Module):
         """
         self.register_buffer('_wamd_node_features_2021', torch.log1p(wamd_2021))
         self.register_buffer('_wamd_node_features_2024', torch.log1p(wamd_2024))
+
+    def register_fdw_node_features(self, fdw_2021: torch.Tensor, fdw_2024: torch.Tensor):
+        """Register precomputed flow+degree+wamd node features as log-transformed buffers."""
+        self.register_buffer('_fdw_node_features_2021', torch.log1p(fdw_2021))
+        self.register_buffer('_fdw_node_features_2024', torch.log1p(fdw_2024))
+
+    def register_flow_wamd_v2_node_features(self, fw2_2021: torch.Tensor, fw2_2024: torch.Tensor):
+        """Register precomputed flow+wamd (no degree) node features as log-transformed buffers.
+
+        Args:
+            fw2_2021: (num_nodes, 2) raw [flow_w, wamd_w] for 2021
+            fw2_2024: (num_nodes, 2) raw [flow_w, wamd_w] for 2024
+        """
+        self.register_buffer('_fw2_node_features_2021', torch.log1p(fw2_2021))
+        self.register_buffer('_fw2_node_features_2024', torch.log1p(fw2_2024))
 
     @staticmethod
     def _mode_requires_raw_temporal(node_feature_mode: str) -> bool:
@@ -408,11 +457,31 @@ class EnhancedDualBranchModel(nn.Module):
             raw_graph_stats_2024 = self._compute_raw_temporal_graph_stats(raw_x_2024, graphs_2024, num_nodes)
             features_2021 = torch.cat([features_2021, raw_graph_stats_2021], dim=1)
             features_2024 = torch.cat([features_2024, raw_graph_stats_2024], dim=1)
+        elif self.spatial_node_feature_mode == 'raw_temporal_mean':
+            # (num_nodes, temporal_input_size) — mean over 168 time steps
+            raw_mean_2021 = torch.log1p(raw_x_2021.mean(dim=1))  # (N, feat_dim)
+            raw_mean_2024 = torch.log1p(raw_x_2024.mean(dim=1))
+            features_2021 = torch.cat([features_2021, raw_mean_2021], dim=1)
+            features_2024 = torch.cat([features_2024, raw_mean_2024], dim=1)
         elif self.spatial_node_feature_mode == 'flow_wamd':
             if not hasattr(self, '_wamd_node_features_2021'):
                 raise ValueError("flow_wamd mode requires register_wamd_node_features() to be called first")
             features_2021 = torch.cat([features_2021, self._wamd_node_features_2021.to(device)], dim=1)
             features_2024 = torch.cat([features_2024, self._wamd_node_features_2024.to(device)], dim=1)
+        elif self.spatial_node_feature_mode == 'flow_degree_wamd':
+            if not hasattr(self, '_fdw_node_features_2021'):
+                raise ValueError("flow_degree_wamd mode requires register_fdw_node_features() to be called first")
+            features_2021 = torch.cat([features_2021, self._fdw_node_features_2021.to(device),
+                                        self._fdw_node_features_2024.to(device)], dim=1)
+            features_2024 = torch.cat([features_2024, self._fdw_node_features_2021.to(device),
+                                        self._fdw_node_features_2024.to(device)], dim=1)
+        elif self.spatial_node_feature_mode == 'flow_wamd_v2':
+            if not hasattr(self, '_fw2_node_features_2021'):
+                raise ValueError("flow_wamd_v2 mode requires register_flow_wamd_v2_node_features() to be called first")
+            features_2021 = torch.cat([features_2021, self._fw2_node_features_2021.to(device),
+                                        self._fw2_node_features_2024.to(device)], dim=1)
+            features_2024 = torch.cat([features_2024, self._fw2_node_features_2021.to(device),
+                                        self._fw2_node_features_2024.to(device)], dim=1)
 
         if self.gine_use_spatial_coords and hasattr(self, '_node_coords'):
             coords = self._node_coords.to(device)
@@ -422,25 +491,57 @@ class EnhancedDualBranchModel(nn.Module):
         return features_2021, features_2024
 
     def compute_laplacian_pe_if_needed(self, graphs_2021, graphs_2024, num_nodes, device):
-        """Compute Laplacian PE for GINE model if not already computed"""
-        if self.use_laplacian_pe and self.laplacian_pe_2021 is None:
-            edge_index_2021, edge_attr_2021 = graphs_2021[0]
-            edge_index_2024, edge_attr_2024 = graphs_2024[0]
+        """Compute Laplacian PE for GINE model if not already computed.
 
-            self.laplacian_pe_2021 = compute_laplacian_pe(
-                edge_index_2021,
-                edge_attr_2021.squeeze(),
-                num_nodes,
-                k=config.LAPLACIAN_PE_DIM,
-                device=device
-            )
-            self.laplacian_pe_2024 = compute_laplacian_pe(
-                edge_index_2024,
-                edge_attr_2024.squeeze(),
-                num_nodes,
-                k=config.LAPLACIAN_PE_DIM,
-                device=device
-            )
+        Results are cached to disk keyed by (num_nodes, topk_out, topk_in, pe_dim) so
+        subsequent experiments with the same graph topology skip the expensive eigsh call.
+        Cache lives in outputs/.laplacian_pe_cache/.
+        """
+        if not (self.use_laplacian_pe and self.laplacian_pe_2021 is None):
+            return
+
+        import os
+        k = config.LAPLACIAN_PE_DIM
+        topk_out = getattr(config, 'GRAPH_TOPK_OUT', 'none')
+        topk_in  = getattr(config, 'GRAPH_TOPK_IN',  'none')
+        cache_dir = "outputs/.laplacian_pe_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(
+            cache_dir,
+            f"lpe_n{num_nodes}_k{k}_topk{topk_out}x{topk_in}.pt"
+        )
+
+        if os.path.exists(cache_path):
+            print(f"[LapPE] Loading from cache: {cache_path}")
+            cached = torch.load(cache_path, map_location='cpu')
+            self.laplacian_pe_2021 = cached['pe_2021'].to(device)
+            self.laplacian_pe_2024 = cached['pe_2024'].to(device)
+            print(f"[LapPE] Loaded: {self.laplacian_pe_2021.shape}")
+            return
+
+        edge_index_2021, edge_attr_2021 = graphs_2021[0]
+        edge_index_2024, edge_attr_2024 = graphs_2024[0]
+
+        self.laplacian_pe_2021 = compute_laplacian_pe(
+            edge_index_2021,
+            edge_attr_2021.squeeze(),
+            num_nodes,
+            k=k,
+            device=device
+        )
+        self.laplacian_pe_2024 = compute_laplacian_pe(
+            edge_index_2024,
+            edge_attr_2024.squeeze(),
+            num_nodes,
+            k=k,
+            device=device
+        )
+
+        torch.save(
+            {'pe_2021': self.laplacian_pe_2021.cpu(), 'pe_2024': self.laplacian_pe_2024.cpu()},
+            cache_path
+        )
+        print(f"[LapPE] Saved cache: {cache_path}")
 
     def forward(self, x_2021, x_2024, graphs_2021, graphs_2024, num_nodes, node_indices=None,
                 raw_x_2021=None, raw_x_2024=None):

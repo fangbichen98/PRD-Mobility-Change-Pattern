@@ -302,6 +302,207 @@ class DualYearDataProcessor:
         logger.info("Feature shape per grid: (168, 4) = [total_2021_log, wamd_2021_log, total_2024_log, wamd_2024_log]")
         return change_features
 
+    def aggregate_grid_flows_with_degree_wamd(self, od_df, grid_ids, coord_lookup):
+        """
+        Aggregate (168, 3) = [total_flow_h, degree_h, wamd_h] per grid per hour.
+
+        - total_flow_h: inflow + outflow at hour h (raw num_total)
+        - degree_h:     number of unique neighbours (union of origins and destinations) at hour h
+        - wamd_h:       flow-weighted average OD distance (km) at hour h
+
+        Args:
+            od_df:        OD DataFrame with date_dt, time, o_grid_500, d_grid_500, num_total
+            grid_ids:     list of grid IDs to process
+            coord_lookup: {grid_id: (lon, lat)}
+
+        Returns:
+            {grid_id: np.ndarray (168, 3)}  raw (NOT log-transformed)
+        """
+        from src.preprocessing.graph_builder import SpatialGraphBuilder
+
+        logger.info("Aggregating grid flows with degree+wamd (flow / degree / wamd per hour)")
+        num_hours = config.TRAIN_DAYS * 24
+
+        min_date = od_df['date_dt'].min()
+        od_df = od_df.copy()
+        od_df['hour_idx'] = (od_df['date_dt'] - min_date).dt.days * 24 + od_df['time']
+
+        grid_flows = {}
+        for grid_id in tqdm(grid_ids, desc="Processing grids (degree+wamd)"):
+            hourly_array = np.zeros((num_hours, 3), dtype=np.float32)
+
+            grid_lon, grid_lat = coord_lookup.get(grid_id, (0.0, 0.0))
+
+            # --- inflow side ---
+            inflow_df = od_df[od_df['d_grid_500'] == grid_id]
+            if len(inflow_df) > 0:
+                inflow_df = inflow_df.copy()
+                o_lons = inflow_df['o_grid_500'].map(
+                    lambda g: coord_lookup.get(g, (0.0, 0.0))[0]).values
+                o_lats = inflow_df['o_grid_500'].map(
+                    lambda g: coord_lookup.get(g, (0.0, 0.0))[1]).values
+                src_coords = np.stack([o_lons, o_lats], axis=1).astype(np.float32)
+                dst_coords = np.full_like(src_coords, [grid_lon, grid_lat])
+                dists = SpatialGraphBuilder._haversine_distance_km(src_coords, dst_coords)
+                inflow_df = inflow_df.assign(
+                    dist_km=dists,
+                    weighted_dist=inflow_df['num_total'].values * dists
+                )
+                in_total  = inflow_df.groupby('hour_idx')['num_total'].sum()
+                in_wdist  = inflow_df.groupby('hour_idx')['weighted_dist'].sum()
+                in_degree = inflow_df.groupby('hour_idx')['o_grid_500'].nunique()
+            else:
+                in_total  = pd.Series(dtype=float)
+                in_wdist  = pd.Series(dtype=float)
+                in_degree = pd.Series(dtype=float)
+
+            # --- outflow side ---
+            outflow_df = od_df[od_df['o_grid_500'] == grid_id]
+            if len(outflow_df) > 0:
+                outflow_df = outflow_df.copy()
+                d_lons = outflow_df['d_grid_500'].map(
+                    lambda g: coord_lookup.get(g, (0.0, 0.0))[0]).values
+                d_lats = outflow_df['d_grid_500'].map(
+                    lambda g: coord_lookup.get(g, (0.0, 0.0))[1]).values
+                dst_coords2 = np.stack([d_lons, d_lats], axis=1).astype(np.float32)
+                src_coords2 = np.full_like(dst_coords2, [grid_lon, grid_lat])
+                dists2 = SpatialGraphBuilder._haversine_distance_km(src_coords2, dst_coords2)
+                outflow_df = outflow_df.assign(
+                    dist_km=dists2,
+                    weighted_dist=outflow_df['num_total'].values * dists2
+                )
+                out_total  = outflow_df.groupby('hour_idx')['num_total'].sum()
+                out_wdist  = outflow_df.groupby('hour_idx')['weighted_dist'].sum()
+                out_degree = outflow_df.groupby('hour_idx')['d_grid_500'].nunique()
+            else:
+                out_total  = pd.Series(dtype=float)
+                out_wdist  = pd.Series(dtype=float)
+                out_degree = pd.Series(dtype=float)
+
+            # --- combine ---
+            for h in range(num_hours):
+                t  = float(in_total.get(h, 0.0))  + float(out_total.get(h, 0.0))
+                wd = float(in_wdist.get(h, 0.0))  + float(out_wdist.get(h, 0.0))
+                d  = float(in_degree.get(h, 0.0)) + float(out_degree.get(h, 0.0))
+                hourly_array[h, 0] = t
+                hourly_array[h, 1] = d
+                hourly_array[h, 2] = wd / t if t > 1e-6 else 0.0
+
+            grid_flows[grid_id] = hourly_array
+
+        logger.info(f"Aggregated degree+wamd flows to {num_hours} hourly snapshots per grid")
+        return grid_flows
+
+    def compute_temporal_change_features_flow_wamd_v2(self, flows_2021_raw, flows_2024_raw):
+        """
+        Build (168, 4) temporal features from flow+wamd hourly arrays (degree dropped).
+
+        Args:
+            flows_2021_raw: {grid_id: (168, 3)} raw [total_h, degree_h, wamd_h]
+            flows_2024_raw: {grid_id: (168, 3)} raw [total_h, degree_h, wamd_h]
+
+        Returns:
+            {grid_id: np.ndarray (168, 4)}
+            = [log(1+flow_2021), log(1+wamd_2021), log(1+flow_2024), log(1+wamd_2024)]
+        """
+        logger.info("Computing temporal change features (flow_wamd_v2 mode, degree dropped)")
+        change_features = {}
+        for grid_id, f21 in flows_2021_raw.items():
+            if grid_id not in flows_2024_raw:
+                logger.warning(f"Grid {grid_id} not found in 2024 data, skipping")
+                continue
+            f24 = flows_2024_raw[grid_id]
+            combined = np.stack([
+                np.log1p(f21[:, 0]),  # flow_2021_log
+                np.log1p(f21[:, 2]),  # wamd_2021_log  (col 1 = degree, skipped)
+                np.log1p(f24[:, 0]),  # flow_2024_log
+                np.log1p(f24[:, 2]),  # wamd_2024_log
+            ], axis=1)  # (168, 4)
+            change_features[grid_id] = combined
+        logger.info(f"Computed flow_wamd_v2 change features for {len(change_features)} grids")
+        logger.info("Feature shape per grid: (168, 4) = [flow21_log, wamd21_log, flow24_log, wamd24_log]")
+        return change_features
+
+    @staticmethod
+    def compute_flow_wamd_v2_node_features(flows_2021_raw, flows_2024_raw):
+        """
+        Compute weekly [flow, wamd] per node (degree dropped) for GINE spatial node features.
+
+        Returns:
+            node_feats_2021: {grid_id: np.ndarray (2,)} = [flow_w, wamd_w]
+            node_feats_2024: {grid_id: np.ndarray (2,)} = [flow_w, wamd_w]
+        """
+        def _weekly(arr):
+            total_h = arr[:, 0]
+            wamd_h  = arr[:, 2]
+            flow_w  = float(total_h.sum())
+            wamd_w  = float((total_h * wamd_h).sum() / max(flow_w, 1e-6))
+            return np.array([flow_w, wamd_w], dtype=np.float32)
+
+        node_feats_2021 = {gid: _weekly(arr) for gid, arr in flows_2021_raw.items()}
+        node_feats_2024 = {gid: _weekly(arr) for gid, arr in flows_2024_raw.items()}
+        return node_feats_2021, node_feats_2024
+
+    def compute_temporal_change_features_flow_degree_wamd(self, flows_2021_raw, flows_2024_raw):
+        """
+        Build (168, 6) temporal features from flow+degree+wamd hourly arrays.
+
+        Args:
+            flows_2021_raw: {grid_id: (168, 3)} raw [total_h, degree_h, wamd_h]
+            flows_2024_raw: {grid_id: (168, 3)} raw [total_h, degree_h, wamd_h]
+
+        Returns:
+            {grid_id: np.ndarray (168, 6)}
+            = [log(1+flow_2021), log(1+degree_2021), log(1+wamd_2021),
+               log(1+flow_2024), log(1+degree_2024), log(1+wamd_2024)]
+        """
+        logger.info("Computing temporal change features (flow_degree_wamd mode)")
+        change_features = {}
+        for grid_id, f21 in flows_2021_raw.items():
+            if grid_id not in flows_2024_raw:
+                logger.warning(f"Grid {grid_id} not found in 2024 data, skipping")
+                continue
+            f24 = flows_2024_raw[grid_id]
+            combined = np.stack([
+                np.log1p(f21[:, 0]),  # flow_2021_log
+                np.log1p(f21[:, 1]),  # degree_2021_log
+                np.log1p(f21[:, 2]),  # wamd_2021_log
+                np.log1p(f24[:, 0]),  # flow_2024_log
+                np.log1p(f24[:, 1]),  # degree_2024_log
+                np.log1p(f24[:, 2]),  # wamd_2024_log
+            ], axis=1)  # (168, 6)
+            change_features[grid_id] = combined
+        logger.info(f"Computed flow_degree_wamd change features for {len(change_features)} grids")
+        logger.info("Feature shape per grid: (168, 6) = "
+                    "[flow21_log, degree21_log, wamd21_log, flow24_log, degree24_log, wamd24_log]")
+        return change_features
+
+    @staticmethod
+    def compute_flow_degree_wamd_node_features(flows_2021_raw, flows_2024_raw):
+        """
+        Compute weekly [flow, degree, wamd] per node for GINE spatial node features.
+
+        Args:
+            flows_2021_raw: {grid_id: (168, 3)} raw [total_h, degree_h, wamd_h]
+            flows_2024_raw: {grid_id: (168, 3)} raw [total_h, degree_h, wamd_h]
+
+        Returns:
+            node_feats_2021: {grid_id: np.ndarray (3,)} = [flow_w, degree_w, wamd_w]  raw
+            node_feats_2024: {grid_id: np.ndarray (3,)} = [flow_w, degree_w, wamd_w]  raw
+        """
+        def _weekly(arr):
+            total_h  = arr[:, 0]
+            degree_h = arr[:, 1]
+            wamd_h   = arr[:, 2]
+            flow_w   = float(total_h.sum())
+            degree_w = float(degree_h.sum())
+            wamd_w   = float((total_h * wamd_h).sum() / max(flow_w, 1e-6))
+            return np.array([flow_w, degree_w, wamd_w], dtype=np.float32)
+
+        node_feats_2021 = {gid: _weekly(arr) for gid, arr in flows_2021_raw.items()}
+        node_feats_2024 = {gid: _weekly(arr) for gid, arr in flows_2024_raw.items()}
+        return node_feats_2021, node_feats_2024
+
     @staticmethod
     def compute_wamd_node_features(flows_raw):
         """
@@ -469,6 +670,30 @@ class DualYearDataProcessor:
             change_features = self.compute_temporal_change_features_wamd(flows_2021_raw, flows_2024_raw)
             wamd_node_features_2021 = self.compute_wamd_node_features(flows_2021_raw)
             wamd_node_features_2024 = self.compute_wamd_node_features(flows_2024_raw)
+            fdw_node_features_2021 = None
+            fdw_node_features_2024 = None
+        elif temporal_feature_mode == 'flow_degree_wamd':
+            if coord_lookup is None:
+                raise ValueError("coord_lookup is required for TEMPORAL_FEATURE_MODE='flow_degree_wamd'")
+            logger.info(f"Aggregating flow+degree+wamd for {len(labeled_grid_ids)} labeled grids")
+            flows_2021_raw = self.aggregate_grid_flows_with_degree_wamd(od_2021, labeled_grid_ids, coord_lookup)
+            flows_2024_raw = self.aggregate_grid_flows_with_degree_wamd(od_2024, labeled_grid_ids, coord_lookup)
+            change_features = self.compute_temporal_change_features_flow_degree_wamd(flows_2021_raw, flows_2024_raw)
+            fdw_node_features_2021, fdw_node_features_2024 = \
+                self.compute_flow_degree_wamd_node_features(flows_2021_raw, flows_2024_raw)
+            wamd_node_features_2021 = None
+            wamd_node_features_2024 = None
+        elif temporal_feature_mode == 'flow_wamd_v2':
+            if coord_lookup is None:
+                raise ValueError("coord_lookup is required for TEMPORAL_FEATURE_MODE='flow_wamd_v2'")
+            logger.info(f"Aggregating flow+wamd (no degree) for {len(labeled_grid_ids)} labeled grids")
+            flows_2021_raw = self.aggregate_grid_flows_with_degree_wamd(od_2021, labeled_grid_ids, coord_lookup)
+            flows_2024_raw = self.aggregate_grid_flows_with_degree_wamd(od_2024, labeled_grid_ids, coord_lookup)
+            change_features = self.compute_temporal_change_features_flow_wamd_v2(flows_2021_raw, flows_2024_raw)
+            fdw_node_features_2021, fdw_node_features_2024 = \
+                self.compute_flow_wamd_v2_node_features(flows_2021_raw, flows_2024_raw)
+            wamd_node_features_2021 = None
+            wamd_node_features_2024 = None
         else:
             logger.info(f"Aggregating RAW flows for {len(labeled_grid_ids)} labeled grids")
             logger.info("  → Using raw num_total (absolute trip counts)")
@@ -481,6 +706,8 @@ class DualYearDataProcessor:
             )
             wamd_node_features_2021 = None
             wamd_node_features_2024 = None
+            fdw_node_features_2021 = None
+            fdw_node_features_2024 = None
 
         logger.info(f"\nDual-year data preparation completed:")
         logger.info(f"  - 2021 OD records: {len(od_2021)}")
@@ -497,6 +724,8 @@ class DualYearDataProcessor:
             'norm_params_2024': {},
             'wamd_node_features_2021': wamd_node_features_2021,
             'wamd_node_features_2024': wamd_node_features_2024,
+            'fdw_node_features_2021': fdw_node_features_2021,
+            'fdw_node_features_2024': fdw_node_features_2024,
         }
 
     def extract_features_for_grids(self, od_data, grid_ids):
@@ -644,7 +873,7 @@ def _resolve_edge_feature_mode(spatial_model: str, edge_feature_mode: str = None
     spatial_model = (spatial_model or getattr(config, 'SPATIAL_MODEL', 'GCN')).upper()
     configured_mode = edge_feature_mode or getattr(config, 'GINE_EDGE_FEATURE_MODE', 'flow_only')
 
-    if spatial_model != 'GINE':
+    if spatial_model not in ('GINE', 'GAT', 'MPNN'):
         return 'flow_only'
 
     if configured_mode not in {'flow_only', 'flow_distance_direction', 'flow_distribution'}:
@@ -851,6 +1080,8 @@ def prepare_dual_year_experiment_data(
             'norm_params_2024': dual_year_data['norm_params_2024'],
             'wamd_node_features_2021': dual_year_data['wamd_node_features_2021'],
             'wamd_node_features_2024': dual_year_data['wamd_node_features_2024'],
+            'fdw_node_features_2021': dual_year_data.get('fdw_node_features_2021'),
+            'fdw_node_features_2024': dual_year_data.get('fdw_node_features_2024'),
             'label_df': label_df,
             'class_weights': class_weights,
             'label_file_name': label_path,
@@ -1107,6 +1338,8 @@ def prepare_dual_year_experiment_data(
         'norm_params_2024': feature_data['norm_params_2024'],
         'wamd_node_features_2021': feature_data.get('wamd_node_features_2021'),
         'wamd_node_features_2024': feature_data.get('wamd_node_features_2024'),
+        'fdw_node_features_2021': feature_data.get('fdw_node_features_2021'),
+        'fdw_node_features_2024': feature_data.get('fdw_node_features_2024'),
         'label_df': feature_data['label_df'],
         'class_weights': feature_data['class_weights'],
         'label_file_name': feature_data['label_file_name'],

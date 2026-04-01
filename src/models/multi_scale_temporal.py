@@ -36,6 +36,62 @@ def _aggregate_daily_wamd(x: torch.Tensor) -> torch.Tensor:
     return torch.stack([total_d, wamd_d], dim=2)                        # (b, 7, 2)
 
 
+def _aggregate_daily_flow_degree_wamd(x: torch.Tensor, agg_mode: str = 'sum') -> torch.Tensor:
+    """
+    Aggregate hourly [flow_h, degree_h, wamd_h] to daily [flow_d, degree_d, wamd_d].
+
+    flow_d   = sum or mean of hourly flow over 24h
+    degree_d = sum or mean of hourly degree over 24h
+    wamd_d   = flow-weighted average of hourly wamd = Σ(flow_h * wamd_h) / Σ(flow_h)
+
+    Args:
+        x:        (batch, 168, 3) where col0=flow, col1=degree, col2=wamd
+        agg_mode: 'sum' or 'mean' for flow and degree aggregation
+    Returns:
+        (batch, 7, 3)
+    """
+    b = x.size(0)
+    x_r    = x.view(b, 7, 24, 3)          # (b, 7, 24, 3)
+    flow_h   = x_r[:, :, :, 0]            # (b, 7, 24)
+    degree_h = x_r[:, :, :, 1]            # (b, 7, 24)
+    wamd_h   = x_r[:, :, :, 2]            # (b, 7, 24)
+
+    if agg_mode == 'mean':
+        flow_d   = flow_h.mean(dim=2)
+        degree_d = degree_h.mean(dim=2)
+    else:  # sum
+        flow_d   = flow_h.sum(dim=2)
+        degree_d = degree_h.sum(dim=2)
+
+    wamd_d = (flow_h * wamd_h).sum(dim=2) / flow_h.sum(dim=2).clamp_min(1e-6)
+    return torch.stack([flow_d, degree_d, wamd_d], dim=2)              # (b, 7, 3)
+
+
+def _aggregate_weekly_flow_degree_wamd(x: torch.Tensor, agg_mode: str = 'sum') -> torch.Tensor:
+    """
+    Aggregate hourly [flow_h, degree_h, wamd_h] to weekly scalar stats (1, 3).
+
+    Args:
+        x:        (batch, 168, 3)
+        agg_mode: 'sum' or 'mean' for flow and degree
+    Returns:
+        (batch, 1, 3)
+    """
+    flow_h   = x[:, :, 0]   # (b, 168)
+    degree_h = x[:, :, 1]
+    wamd_h   = x[:, :, 2]
+
+    if agg_mode == 'mean':
+        flow_w   = flow_h.mean(dim=1, keepdim=True)
+        degree_w = degree_h.mean(dim=1, keepdim=True)
+    else:
+        flow_w   = flow_h.sum(dim=1, keepdim=True)
+        degree_w = degree_h.sum(dim=1, keepdim=True)
+
+    wamd_w = (flow_h * wamd_h).sum(dim=1, keepdim=True) / flow_h.sum(dim=1, keepdim=True).clamp_min(1e-6)
+    return torch.stack([flow_w.squeeze(1), degree_w.squeeze(1), wamd_w.squeeze(1)], dim=1).unsqueeze(1)  # (b,1,3)
+
+
 class MultiScaleTemporalBranch(nn.Module):
     """
     Multi-scale temporal processing branch.
@@ -538,40 +594,40 @@ class SimplifiedMultiScaleTemporalTCN(nn.Module):
 class SimplifiedMultiScaleTemporalTransformer(nn.Module):
     """Lightweight Transformer variant of the simplified multi-scale temporal branch."""
 
-    def __init__(self, input_size=1, hidden_size=256, model_dim=128, num_layers=2, dropout=0.4, daily_agg_mode='sum'):
+    def __init__(self, input_size=1, hidden_size=256, model_dim=128, num_layers=2, dropout=0.4,
+                 daily_agg_mode='sum'):
         super().__init__()
         self.daily_agg_mode = daily_agg_mode
 
         self.in_proj_hourly = nn.Linear(input_size, model_dim)
-        self.in_proj_daily = nn.Linear(input_size, model_dim)
+        self.in_proj_daily  = nn.Linear(input_size, model_dim)
         self.pos_hourly = _TemporalPositionalEncoding(model_dim, max_len=168)
-        self.pos_daily = _TemporalPositionalEncoding(model_dim, max_len=7)
+        self.pos_daily  = _TemporalPositionalEncoding(model_dim, max_len=7)
 
         nhead = 8 if model_dim % 8 == 0 else 4
         enc_layer_hourly = nn.TransformerEncoderLayer(
-            d_model=model_dim,
-            nhead=nhead,
-            dim_feedforward=model_dim * 2,
-            dropout=dropout,
-            batch_first=True,
-            activation='gelu'
+            d_model=model_dim, nhead=nhead, dim_feedforward=model_dim * 2,
+            dropout=dropout, batch_first=True, activation='gelu'
         )
         enc_layer_daily = nn.TransformerEncoderLayer(
-            d_model=model_dim,
-            nhead=nhead,
-            dim_feedforward=model_dim * 2,
-            dropout=dropout,
-            batch_first=True,
-            activation='gelu'
+            d_model=model_dim, nhead=nhead, dim_feedforward=model_dim * 2,
+            dropout=dropout, batch_first=True, activation='gelu'
         )
         self.hourly_encoder = nn.TransformerEncoder(enc_layer_hourly, num_layers=num_layers)
-        self.daily_encoder = nn.TransformerEncoder(enc_layer_daily, num_layers=max(1, num_layers - 1))
+        self.daily_encoder  = nn.TransformerEncoder(enc_layer_daily,  num_layers=max(1, num_layers - 1))
 
         self.proj_hourly = nn.Linear(model_dim, hidden_size)
-        self.proj_daily = nn.Linear(model_dim, hidden_size)
+        self.proj_daily  = nn.Linear(model_dim, hidden_size)
 
+        # weekly_net: input dim depends on mode
+        # flow_degree_wamd: weekly stats are (flow_w, degree_w, wamd_w) → 3 dims
+        # others: 4 stats × input_size
+        if daily_agg_mode in ('sum_fdw', 'mean_fdw'):
+            weekly_in_dim = 3
+        else:
+            weekly_in_dim = input_size * 4
         self.weekly_net = nn.Sequential(
-            nn.Linear(input_size * 4, 64),
+            nn.Linear(weekly_in_dim, 64),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(64, hidden_size)
@@ -584,35 +640,43 @@ class SimplifiedMultiScaleTemporalTransformer(nn.Module):
         )
 
     def extract_features_single(self, x):
+        # hourly
         x_hourly = self.pos_hourly(self.in_proj_hourly(x))
         h_hourly = self.hourly_encoder(x_hourly).mean(dim=1)
         h_hourly = self.proj_hourly(h_hourly)
 
+        # daily aggregation
         if self.daily_agg_mode == 'wamd':
             x_daily = _aggregate_daily_wamd(x)
+        elif self.daily_agg_mode == 'sum_fdw':
+            x_daily = _aggregate_daily_flow_degree_wamd(x, agg_mode='sum')
+        elif self.daily_agg_mode == 'mean_fdw':
+            x_daily = _aggregate_daily_flow_degree_wamd(x, agg_mode='mean')
         else:
             x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
         x_daily = self.pos_daily(self.in_proj_daily(x_daily))
         h_daily = self.daily_encoder(x_daily).mean(dim=1)
         h_daily = self.proj_daily(h_daily)
 
-        weekly_sum = x.sum(dim=1)
-        weekly_max = x.max(dim=1)[0]
-        weekly_mean = x.mean(dim=1)
-        trend = (x[:, -1, :] - x[:, 0, :]) / 168
-        stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
-        h_weekly = self.weekly_net(stats)
+        # weekly stats
+        if self.daily_agg_mode in ('sum_fdw', 'mean_fdw'):
+            agg_mode = 'sum' if self.daily_agg_mode == 'sum_fdw' else 'mean'
+            weekly_stats = _aggregate_weekly_flow_degree_wamd(x, agg_mode=agg_mode).squeeze(1)  # (b, 3)
+        else:
+            weekly_sum  = x.sum(dim=1)
+            weekly_max  = x.max(dim=1)[0]
+            weekly_mean = x.mean(dim=1)
+            trend       = (x[:, -1, :] - x[:, 0, :]) / 168
+            weekly_stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
+        h_weekly = self.weekly_net(weekly_stats)
 
-        multi_scale = torch.cat([h_hourly, h_daily, h_weekly], dim=1)
-        return self.fusion(multi_scale)
+        return self.fusion(torch.cat([h_hourly, h_daily, h_weekly], dim=1))
 
     def forward(self, x_2021, x_2024):
-        yearly_features = [
-            self.extract_features_single(x_2021),
-            self.extract_features_single(x_2024)
-        ]
-        diff = yearly_features[1] - yearly_features[0]
-        return torch.stack([yearly_features[0], yearly_features[1], diff], dim=1)
+        f21  = self.extract_features_single(x_2021)
+        f24  = self.extract_features_single(x_2024)
+        diff = f24 - f21
+        return torch.stack([f21, f24, diff], dim=1)
 
 
 class SimplifiedMultiScaleTemporalBiGRU(nn.Module):

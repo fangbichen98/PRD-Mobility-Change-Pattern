@@ -58,9 +58,20 @@ def haversine_km(lon1, lat1, lon2, lat2):
 
 def extract_features_for_grid(grid_id, od_df, coord_lookup, num_hours=168):
     """
-    Extract ~50-dim hand-crafted features for a single grid from one year's OD data.
+    Extract features for a single grid from one year's OD data.
 
-    Returns a 1-D numpy array.
+    Temporal (per grid):
+      - 周总: total_in, total_out, total_flow
+      - 日均: daily_mean_in, daily_mean_out, daily_mean_total
+      - 小时均: hourly_mean_in, hourly_mean_out, hourly_mean_total
+
+    Spatial (per grid):
+      - wamd_out: o点出行加权平均距离 (km)
+      - wamd_in:  d点来源加权平均距离 (km)
+      - out_degree: 唯一目的地数（出度）
+      - in_degree:  唯一来源数（入度）
+
+    Returns a dict of 13 features.
     """
     feats = {}
 
@@ -68,117 +79,78 @@ def extract_features_for_grid(grid_id, od_df, coord_lookup, num_hours=168):
     outflow_df = od_df[od_df['o_grid_500'] == grid_id]
 
     # ---- hourly series ----
+    min_date = od_df['date_dt'].min()
     hourly_in  = np.zeros(num_hours, dtype=np.float32)
     hourly_out = np.zeros(num_hours, dtype=np.float32)
 
     if len(inflow_df) > 0:
-        min_date = od_df['date_dt'].min()
         tmp = inflow_df.copy()
         tmp['hidx'] = (tmp['date_dt'] - min_date).dt.days * 24 + tmp['time']
-        agg = tmp.groupby('hidx')['num_total'].sum()
-        for h, v in agg.items():
+        for h, v in tmp.groupby('hidx')['num_total'].sum().items():
             if 0 <= h < num_hours:
                 hourly_in[h] = v
 
     if len(outflow_df) > 0:
-        min_date = od_df['date_dt'].min()
         tmp = outflow_df.copy()
         tmp['hidx'] = (tmp['date_dt'] - min_date).dt.days * 24 + tmp['time']
-        agg = tmp.groupby('hidx')['num_total'].sum()
-        for h, v in agg.items():
+        for h, v in tmp.groupby('hidx')['num_total'].sum().items():
             if 0 <= h < num_hours:
                 hourly_out[h] = v
 
     hourly_total = hourly_in + hourly_out
 
-    # ---- aggregate stats ----
-    feats['total_in']   = float(hourly_in.sum())
-    feats['total_out']  = float(hourly_out.sum())
-    feats['total_flow'] = float(hourly_total.sum())
-    feats['mean_in']    = float(hourly_in.mean())
-    feats['mean_out']   = float(hourly_out.mean())
-    feats['std_in']     = float(hourly_in.std())
-    feats['std_out']    = float(hourly_out.std())
-    feats['std_total']  = float(hourly_total.std())
-    feats['max_in']     = float(hourly_in.max())
-    feats['max_out']    = float(hourly_out.max())
-    feats['peak_hour_in']  = float(hourly_in.argmax())
-    feats['peak_hour_out'] = float(hourly_out.argmax())
+    # ---- 周总 ----
+    feats['total_in']    = float(hourly_in.sum())
+    feats['total_out']   = float(hourly_out.sum())
+    feats['total_flow']  = float(hourly_total.sum())
 
-    # ---- daily breakdown ----
-    daily_in  = hourly_in.reshape(7, 24).sum(axis=1)   # (7,)
-    daily_out = hourly_out.reshape(7, 24).sum(axis=1)
-    feats['daily_mean_in']  = float(daily_in.mean())
-    feats['daily_mean_out'] = float(daily_out.mean())
-    feats['daily_std_in']   = float(daily_in.std())
-    feats['daily_std_out']  = float(daily_out.std())
+    # ---- 日均 ----
+    daily_in    = hourly_in.reshape(7, 24).sum(axis=1)
+    daily_out   = hourly_out.reshape(7, 24).sum(axis=1)
+    daily_total = hourly_total.reshape(7, 24).sum(axis=1)
+    feats['daily_mean_in']    = float(daily_in.mean())
+    feats['daily_mean_out']   = float(daily_out.mean())
+    feats['daily_mean_total'] = float(daily_total.mean())
 
-    # weekday (Mon-Fri = idx 0-4) vs weekend (Sat-Sun = idx 5-6)
-    feats['weekday_mean_in']  = float(daily_in[:5].mean())
-    feats['weekend_mean_in']  = float(daily_in[5:].mean())
-    feats['weekday_mean_out'] = float(daily_out[:5].mean())
-    feats['weekend_mean_out'] = float(daily_out[5:].mean())
-    wd_in  = daily_in[:5].mean()
-    we_in  = daily_in[5:].mean()
-    feats['weekday_weekend_ratio_in']  = float(wd_in  / (we_in  + 1e-6))
-    feats['weekday_weekend_ratio_out'] = float(daily_out[:5].mean() / (daily_out[5:].mean() + 1e-6))
+    # ---- 小时均 ----
+    feats['hourly_mean_in']    = float(hourly_in.mean())
+    feats['hourly_mean_out']   = float(hourly_out.mean())
+    feats['hourly_mean_total'] = float(hourly_total.mean())
 
-    # ---- spatial / OD stats ----
-    # outflow side
-    if len(outflow_df) > 0 and coord_lookup is not None:
-        src_lon, src_lat = coord_lookup.get(grid_id, (None, None))
-        if src_lon is not None:
-            dests = outflow_df[['d_grid_500', 'num_total']].copy()
-            dests = dests[dests['d_grid_500'].isin(coord_lookup)]
-            if len(dests) > 0:
-                dst_coords = np.array([coord_lookup[d] for d in dests['d_grid_500']])
-                dists = haversine_km(src_lon, src_lat, dst_coords[:, 0], dst_coords[:, 1])
-                flows = dests['num_total'].values.astype(np.float32)
-                total_f = flows.sum()
-                feats['wamd_out'] = float((flows * dists).sum() / (total_f + 1e-6))
-                feats['max_dist_out'] = float(dists.max())
-                feats['unique_dest'] = float(dests['d_grid_500'].nunique())
-                # destination entropy
-                p = flows / (total_f + 1e-6)
-                feats['dest_entropy'] = float(-np.sum(p * np.log(p + 1e-9)))
-            else:
-                feats['wamd_out'] = 0.0
-                feats['max_dist_out'] = 0.0
-                feats['unique_dest'] = 0.0
-                feats['dest_entropy'] = 0.0
+    # ---- 空间 OD: outflow (o点) ----
+    lon, lat = coord_lookup.get(grid_id, (None, None))
+    if lon is not None and len(outflow_df) > 0:
+        dests = outflow_df[['d_grid_500', 'num_total']].copy()
+        dests = dests[dests['d_grid_500'].isin(coord_lookup)]
+        if len(dests) > 0:
+            dst_coords = np.array([coord_lookup[d] for d in dests['d_grid_500']])
+            dists = haversine_km(lon, lat, dst_coords[:, 0], dst_coords[:, 1])
+            flows = dests['num_total'].values.astype(np.float32)
+            feats['wamd_out']   = float((flows * dists).sum() / (flows.sum() + 1e-6))
+            feats['out_degree'] = float(dests['d_grid_500'].nunique())
         else:
-            feats['wamd_out'] = 0.0
-            feats['max_dist_out'] = 0.0
-            feats['unique_dest'] = 0.0
-            feats['dest_entropy'] = 0.0
+            feats['wamd_out']   = 0.0
+            feats['out_degree'] = 0.0
     else:
-        feats['wamd_out'] = 0.0
-        feats['max_dist_out'] = 0.0
-        feats['unique_dest'] = 0.0
-        feats['dest_entropy'] = 0.0
+        feats['wamd_out']   = 0.0
+        feats['out_degree'] = 0.0
 
-    # inflow side
-    if len(inflow_df) > 0 and coord_lookup is not None:
-        dst_lon, dst_lat = coord_lookup.get(grid_id, (None, None))
-        if dst_lon is not None:
-            srcs = inflow_df[['o_grid_500', 'num_total']].copy()
-            srcs = srcs[srcs['o_grid_500'].isin(coord_lookup)]
-            if len(srcs) > 0:
-                src_coords = np.array([coord_lookup[s] for s in srcs['o_grid_500']])
-                dists = haversine_km(dst_lon, dst_lat, src_coords[:, 0], src_coords[:, 1])
-                flows = srcs['num_total'].values.astype(np.float32)
-                total_f = flows.sum()
-                feats['wamd_in'] = float((flows * dists).sum() / (total_f + 1e-6))
-                feats['unique_origin'] = float(srcs['o_grid_500'].nunique())
-            else:
-                feats['wamd_in'] = 0.0
-                feats['unique_origin'] = 0.0
+    # ---- 空间 OD: inflow (d点) ----
+    if lon is not None and len(inflow_df) > 0:
+        srcs = inflow_df[['o_grid_500', 'num_total']].copy()
+        srcs = srcs[srcs['o_grid_500'].isin(coord_lookup)]
+        if len(srcs) > 0:
+            src_coords = np.array([coord_lookup[s] for s in srcs['o_grid_500']])
+            dists = haversine_km(lon, lat, src_coords[:, 0], src_coords[:, 1])
+            flows = srcs['num_total'].values.astype(np.float32)
+            feats['wamd_in']   = float((flows * dists).sum() / (flows.sum() + 1e-6))
+            feats['in_degree'] = float(srcs['o_grid_500'].nunique())
         else:
-            feats['wamd_in'] = 0.0
-            feats['unique_origin'] = 0.0
+            feats['wamd_in']   = 0.0
+            feats['in_degree'] = 0.0
     else:
-        feats['wamd_in'] = 0.0
-        feats['unique_origin'] = 0.0
+        feats['wamd_in']   = 0.0
+        feats['in_degree'] = 0.0
 
     return feats
 
@@ -366,7 +338,7 @@ def main():
 
     # ---- build features ----
     label_hash = hashlib.md5(args.label_path.encode()).hexdigest()[:8]
-    cache_path = None if args.no_cache else f"data/cache/baseline_ml_features_{label_hash}_nodelta.pkl"
+    cache_path = None if args.no_cache else f"data/cache/baseline_ml_features_{label_hash}_v2.pkl"
 
     X_all, col_names = build_feature_matrix(
         all_grid_ids, od_2021, od_2024, coord_lookup, cache_path=cache_path

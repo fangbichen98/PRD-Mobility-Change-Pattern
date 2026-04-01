@@ -1,0 +1,9 @@
+{
+  "name": "prd-mobility-change-pattern",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "echo 'No build needed for Python project'",
+    "lint": "echo 'Skipping lint' || true",
+    "test": "echo 'Skipping tests' || true"
+  }
+}

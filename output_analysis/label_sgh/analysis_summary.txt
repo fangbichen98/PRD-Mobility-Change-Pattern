@@ -1,0 +1,90 @@
+================================================================================
+LABEL_SGH MODEL ANALYSIS SUMMARY REPORT
+================================================================================
+
+1. DATA OVERVIEW
+--------------------------------------------------------------------------------
+Total Labeled Grids: 4,143
+Date: 2026-03-11
+Model Version: v4 (Larger Capacity)
+
+Class Distribution:
+  Class 1 (Stable-Balanced):  500 (12.07%)
+  Class 2 (Growth-Balanced):  259 ( 6.25%)
+  Class 3 (Decline-Balanced):  384 ( 9.27%)
+  Class 4 (Stable-Aggregation):  500 (12.07%)
+  Class 5 (Growth-Aggregation):  500 (12.07%)
+  Class 6 (Decline-Aggregation):  500 (12.07%)
+  Class 7 (Stable-Diffusion):  500 (12.07%)
+  Class 8 (Growth-Diffusion):  500 (12.07%)
+  Class 9 (Decline-Diffusion):  500 (12.07%)
+
+Intensity Distribution:
+  Stable      : 1143 (27.59%)
+  Growth      : 1500 (36.21%)
+  Decline     : 1500 (36.21%)
+
+Direction Distribution:
+  Balanced    : 1500 (36.21%)
+  Aggregation : 1259 (30.39%)
+  Diffusion   : 1384 (33.41%)
+
+--------------------------------------------------------------------------------
+2. GEOGRAPHIC DISTRIBUTION
+--------------------------------------------------------------------------------
+Longitude Range: 113.5243 to 115.4188
+Latitude Range:  22.4155 to 23.9441
+
+Top 10 Cities by Grid Count:
+   1. 惠州市                 : 2946 (71.11%)
+   2. 深圳市                 :  695 (16.78%)
+   3. 东莞市                 :  502 (12.12%)
+
+--------------------------------------------------------------------------------
+3. MODEL PERFORMANCE
+--------------------------------------------------------------------------------
+Test Accuracy:     66.34%
+Test F1 (macro):   0.6480
+Best Val Accuracy: 69.81%
+
+Baseline Comparison:
+  LSTM Baseline:       68.84%
+  v1 (hidden=128):     69.08%
+  v2 (lr=0.0002):      69.32%
+  v4 (hidden=192):     69.81%
+  Improvement over v1: +0.73%
+
+--------------------------------------------------------------------------------
+4. MODEL ARCHITECTURE
+--------------------------------------------------------------------------------
+Temporal Branch: LSTMOnlyBranch
+  Hidden Size: 192
+  Num Layers:  2
+  Dropout:     0.4
+
+Spatial Branch: PureGraphDualYearGCN
+  Hidden Size: 192
+  Num Layers:  3
+  Dropout:     0.4
+
+Fusion: GatedFeatureFusion
+  Num Features: 6
+  Hidden Size:  384
+  Dropout:      0.4
+
+Classifier: MLP
+  Layers: 384 → 192 → 9
+
+--------------------------------------------------------------------------------
+5. TRAINING CONFIGURATION
+--------------------------------------------------------------------------------
+Batch Size:          24
+Learning Rate:       0.0001
+Weight Decay:        0.0005
+Max Epochs:          300
+Early Stop Patience: 20
+Random Seed:         42
+
+================================================================================
+END OF REPORT
+================================================================================

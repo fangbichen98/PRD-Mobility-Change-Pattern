@@ -15,7 +15,7 @@ import numpy as np
 import logging
 from datetime import datetime
 import time
-from sklearn.metrics import f1_score, classification_report, confusion_matrix
+from sklearn.metrics import f1_score, classification_report, confusion_matrix, cohen_kappa_score
 import json
 
 # Add project root to path
@@ -73,7 +73,7 @@ def parse_args():
                         help='Export the resolved train/val/test split manifest JSON')
     parser.add_argument('--samples-per-class', type=int, default=None,
                         help='Optional per-class sampling for small-scale experiments')
-    parser.add_argument('--spatial-model', type=str, choices=['GCN', 'SAGE', 'WGCN', 'GINE', 'GIN', 'GAT', 'EVOLVEGCN'], default=None,
+    parser.add_argument('--spatial-model', type=str, choices=['GCN', 'SAGE', 'WGCN', 'GINE', 'GIN', 'GAT', 'EVOLVEGCN', 'MPNN'], default=None,
                         help='Override spatial branch model')
     parser.add_argument('--temporal-model', type=str, choices=['LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', 'BIGRU'], default=None,
                         help='Override temporal branch model')
@@ -106,7 +106,9 @@ def parse_args():
     parser.add_argument('--random-seed', type=int, default=None,
                         help='Override random seed for data sampling/splitting')
     parser.add_argument('--spatial-node-feature-mode', type=str,
-                        choices=['ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d', 'raw_temporal_mean', 'raw_temporal_graph_stats', 'flow_wamd'],
+                        choices=['ones', 'temporal_mean', 'annual_daily_mean', 'annual_daily_mean_2d',
+                                 'raw_temporal_mean', 'raw_temporal_graph_stats', 'flow_wamd',
+                                 'flow_degree_wamd', 'flow_wamd_v2'],
                         default=None,
                         help='Spatial node feature mode for non-GINE branches')
     parser.add_argument('--gine-edge-feature-mode', type=str,
@@ -115,9 +117,13 @@ def parse_args():
                         help='Edge feature mode for GINE: flow only or flow+distance+direction')
     parser.add_argument('--gine-use-spatial-coords', action='store_true', default=None,
                         help='Concatenate normalized (lon, lat) into GINE node features')
+    parser.add_argument('--no-gine-spatial-coords', action='store_true', default=False,
+                        help='Disable spatial coords in GINE node features (overrides config)')
     parser.add_argument('--temporal-feature-mode', type=str,
-                        choices=['inflow_outflow', 'total_wamd'], default=None,
-                        help='Temporal feature mode: inflow_outflow (legacy) or total_wamd')
+                        choices=['inflow_outflow', 'total_wamd', 'flow_degree_wamd', 'flow_wamd_v2'], default=None,
+                        help='Temporal feature mode')
+    parser.add_argument('--daily-agg-mode', type=str, choices=['sum', 'mean'], default=None,
+                        help='Daily aggregation mode for flow_degree_wamd: sum or mean (default: sum)')
     parser.add_argument('--branch-ablation-mode', type=str, choices=['full', 'temporal_only', 'spatial_only'], default='full',
                         help='Ablate temporal/spatial branches while keeping the same training pipeline')
     parser.add_argument('--fusion-ablation-mode', type=str, choices=['gated', 'mean', 'concat'], default='gated',
@@ -127,6 +133,8 @@ def parse_args():
                         help='Override config.SPATIAL_LAYERS (number of GCN/GINE layers)')
     parser.add_argument('--spatial-hidden-size', type=int, default=None,
                         help='Override config.SPATIAL_HIDDEN_SIZE (hidden units per spatial layer)')
+    parser.add_argument('--laplacian-pe-dim', type=int, default=None,
+                        help='Override config.LAPLACIAN_PE_DIM (Laplacian PE dimension for GINE; 0 = disable PE)')
     # Loss function
     parser.add_argument('--focal-loss-gamma', type=float, default=None,
                         help='Use Focal Loss with this gamma value instead of CrossEntropy. '
@@ -472,8 +480,12 @@ def main():
         config.GINE_EDGE_FEATURE_MODE = args.gine_edge_feature_mode
     if args.gine_use_spatial_coords:
         config.GINE_USE_SPATIAL_COORDS = True
+    if args.no_gine_spatial_coords:
+        config.GINE_USE_SPATIAL_COORDS = False
     if args.temporal_feature_mode is not None:
         config.TEMPORAL_FEATURE_MODE = args.temporal_feature_mode
+    if args.daily_agg_mode is not None:
+        config.DAILY_AGG_MODE = args.daily_agg_mode
     if args.graph_temporal_mode is not None:
         config.GRAPH_TEMPORAL_MODE = args.graph_temporal_mode
     if args.temporal_layers is not None:
@@ -482,6 +494,8 @@ def main():
         config.SPATIAL_LAYERS = args.spatial_layers
     if args.spatial_hidden_size is not None:
         config.SPATIAL_HIDDEN_SIZE = args.spatial_hidden_size
+    if args.laplacian_pe_dim is not None:
+        config.LAPLACIAN_PE_DIM = args.laplacian_pe_dim
 
     focal_loss_gamma = args.focal_loss_gamma  # None → CrossEntropy, float → FocalLoss
 
@@ -489,7 +503,7 @@ def main():
     graph_topk_in = config.GRAPH_TOPK_IN
     topk_enabled = (graph_topk_out is not None) or (graph_topk_in is not None)
     active_gine_edge_feature_mode = (
-        config.GINE_EDGE_FEATURE_MODE if spatial_model == 'GINE' else 'flow_only'
+        config.GINE_EDGE_FEATURE_MODE if spatial_model in ('GINE', 'GAT', 'MPNN') else 'flow_only'
     )
 
     # Record start time
@@ -516,6 +530,9 @@ def main():
     logger.info(f"Seed override | random_seed={config.RANDOM_SEED}")
     logger.info(f"Spatial node feature mode | mode={config.SPATIAL_NODE_FEATURE_MODE}")
     logger.info(f"GINE edge feature mode | mode={active_gine_edge_feature_mode}")
+    logger.info(f"Temporal feature mode | mode={getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')}")
+    if getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow') == 'flow_degree_wamd':
+        logger.info(f"Daily agg mode | mode={getattr(config, 'DAILY_AGG_MODE', 'sum')}")
     logger.info(f"Split manifest | load={args.split_manifest}, export={args.export_split_manifest}")
     logger.info(f"Branch ablation mode | mode={args.branch_ablation_mode}")
     logger.info(f"Fusion ablation mode | mode={args.fusion_ablation_mode}")
@@ -568,11 +585,20 @@ def main():
     temporal_features_2021 = {}
     temporal_features_2024 = {}
 
+    _tfm = getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')
     for grid_id, features in data['change_features'].items():
-        # Features shape: (168, 4) = [feat0_2021, feat1_2021, feat0_2024, feat1_2024]
-        # Works for both inflow_outflow and total_wamd modes (same split logic)
-        temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2) for 2021
-        temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2) for 2024
+        if _tfm == 'flow_degree_wamd':
+            # (168, 6) = [flow21, degree21, wamd21, flow24, degree24, wamd24]
+            temporal_features_2021[grid_id] = features[:, [0, 1, 2]]  # (168, 3)
+            temporal_features_2024[grid_id] = features[:, [3, 4, 5]]  # (168, 3)
+        elif _tfm == 'flow_wamd_v2':
+            # (168, 4) = [flow21, wamd21, flow24, wamd24]
+            temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
+            temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
+        else:
+            # inflow_outflow / total_wamd: (168, 4) = [feat0_2021, feat1_2021, feat0_2024, feat1_2024]
+            temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
+            temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
 
     logger.info(f"✓ Temporal features prepared")
 
@@ -618,25 +644,32 @@ def main():
 
     # Prepare all temporal features as tensors
     num_nodes = len(data['grid_id_to_idx'])
-    # 1. 动态获取特征维度（从数据字典中随便取一个样本看它的最后一维）
+    # Dynamically infer feature dim from the first sample
     first_grid_id = next(iter(temporal_features_2021))
-    feat_dim = torch.tensor(temporal_features_2021[first_grid_id]).shape[-1] 
-    # 这里 feat_dim 会自动变成 2
+    feat_dim = torch.tensor(temporal_features_2021[first_grid_id]).shape[-1]
+    # raw temporal always has the per-year dim (2 for inflow_outflow, 3 for flow_degree_wamd)
+    raw_feat_dim = feat_dim
 
-    # 2. 使用 feat_dim 初始化
     all_temporal_2021 = torch.zeros(num_nodes, 168, feat_dim)
     all_temporal_2024 = torch.zeros(num_nodes, 168, feat_dim)
-    all_raw_temporal_2021 = torch.zeros(num_nodes, 168, feat_dim)
-    all_raw_temporal_2024 = torch.zeros(num_nodes, 168, feat_dim)
+    all_raw_temporal_2021 = torch.zeros(num_nodes, 168, raw_feat_dim)
+    all_raw_temporal_2024 = torch.zeros(num_nodes, 168, raw_feat_dim)
 
     for grid_id, idx in data['grid_id_to_idx'].items():
         if grid_id in temporal_features_2021:
-            # 现在维度匹配了，都是 (168, 2)
             all_temporal_2021[idx] = torch.tensor(temporal_features_2021[grid_id], dtype=torch.float32)
             all_temporal_2024[idx] = torch.tensor(temporal_features_2024[grid_id], dtype=torch.float32)
         if grid_id in data['flows_2021']:
-            all_raw_temporal_2021[idx] = torch.tensor(data['flows_2021'][grid_id], dtype=torch.float32)
-            all_raw_temporal_2024[idx] = torch.tensor(data['flows_2024'][grid_id], dtype=torch.float32)
+            raw_arr_2021 = data['flows_2021'][grid_id]
+            raw_arr_2024 = data['flows_2024'][grid_id]
+            # flows_2021/2024 shape may be (168,2) or (168,3) depending on mode
+            if raw_arr_2021.shape[-1] == raw_feat_dim:
+                all_raw_temporal_2021[idx] = torch.tensor(raw_arr_2021, dtype=torch.float32)
+                all_raw_temporal_2024[idx] = torch.tensor(raw_arr_2024, dtype=torch.float32)
+            else:
+                # fallback: use only first raw_feat_dim columns
+                all_raw_temporal_2021[idx] = torch.tensor(raw_arr_2021[:, :raw_feat_dim], dtype=torch.float32)
+                all_raw_temporal_2024[idx] = torch.tensor(raw_arr_2024[:, :raw_feat_dim], dtype=torch.float32)
 
     # Create collator
     collator = PureGraphBatchCollator(
@@ -687,8 +720,17 @@ def main():
     logger.info(f"Spatial model: {spatial_model}")
     logger.info(f"Temporal model: {temporal_model}")
 
+    # Derive temporal_input_size from feature mode
+    _tfm = getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')
+    if _tfm == 'flow_degree_wamd':
+        temporal_input_size = 3  # (168, 3) per year: [flow, degree, wamd]
+    elif _tfm == 'flow_wamd_v2':
+        temporal_input_size = 2  # (168, 2) per year: [flow, wamd]
+    else:
+        temporal_input_size = config.TEMPORAL_INPUT_SIZE  # default 2
+
     model = EnhancedDualBranchModel(
-        temporal_input_size=config.TEMPORAL_INPUT_SIZE,
+        temporal_input_size=temporal_input_size,
         hidden_size=config.FUSION_HIDDEN_SIZE,
         num_classes=config.NUM_CLASSES,
         num_time_steps=config.TIME_STEPS,
@@ -727,6 +769,40 @@ def main():
                 wamd_2024[idx] = torch.from_numpy(wamd_2024_dict[grid_id])
         model.register_wamd_node_features(wamd_2021, wamd_2024)
         logger.info(f"  - Registered wamd node features ({wamd_2021.shape})")
+
+    # Register flow+degree+wamd node features for flow_degree_wamd spatial node feature mode
+    if config.SPATIAL_NODE_FEATURE_MODE == 'flow_degree_wamd':
+        fdw_2021_dict = data.get('fdw_node_features_2021')
+        fdw_2024_dict = data.get('fdw_node_features_2024')
+        if fdw_2021_dict is None or fdw_2024_dict is None:
+            raise ValueError("flow_degree_wamd mode requires TEMPORAL_FEATURE_MODE='flow_degree_wamd' to precompute fdw features")
+        grid_id_to_idx = data['grid_id_to_idx']
+        fdw_2021 = torch.zeros(num_nodes, 3, dtype=torch.float32)
+        fdw_2024 = torch.zeros(num_nodes, 3, dtype=torch.float32)
+        for grid_id, idx in grid_id_to_idx.items():
+            if grid_id in fdw_2021_dict:
+                fdw_2021[idx] = torch.from_numpy(fdw_2021_dict[grid_id])
+            if grid_id in fdw_2024_dict:
+                fdw_2024[idx] = torch.from_numpy(fdw_2024_dict[grid_id])
+        model.register_fdw_node_features(fdw_2021, fdw_2024)
+        logger.info(f"  - Registered flow_degree_wamd node features ({fdw_2021.shape})")
+
+    # Register flow+wamd (no degree) node features for flow_wamd_v2 spatial node feature mode
+    if config.SPATIAL_NODE_FEATURE_MODE == 'flow_wamd_v2':
+        fw2_2021_dict = data.get('fdw_node_features_2021')
+        fw2_2024_dict = data.get('fdw_node_features_2024')
+        if fw2_2021_dict is None or fw2_2024_dict is None:
+            raise ValueError("flow_wamd_v2 mode requires TEMPORAL_FEATURE_MODE='flow_wamd_v2' to precompute features")
+        grid_id_to_idx = data['grid_id_to_idx']
+        fw2_2021 = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        fw2_2024 = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        for grid_id, idx in grid_id_to_idx.items():
+            if grid_id in fw2_2021_dict:
+                fw2_2021[idx] = torch.from_numpy(fw2_2021_dict[grid_id])
+            if grid_id in fw2_2024_dict:
+                fw2_2024[idx] = torch.from_numpy(fw2_2024_dict[grid_id])
+        model.register_flow_wamd_v2_node_features(fw2_2021, fw2_2024)
+        logger.info(f"  - Registered flow_wamd_v2 node features ({fw2_2021.shape})")
 
     model = model.to(device)
 
@@ -866,9 +942,13 @@ def main():
     logger.info(f"  - F1 Score: {test_metrics['f1']:.4f}")
 
     # Save test results with detailed configuration
+    test_kappa = cohen_kappa_score(test_metrics['all_labels'], test_metrics['all_preds'])
+    logger.info(f"  - Kappa: {test_kappa:.4f}")
+
     test_results = {
         'test_accuracy': float(test_metrics['accuracy']),
         'test_f1': float(test_metrics['f1']),
+        'test_kappa': float(test_kappa),
         'improvement': 'Multi-Scale Temporal Branch',
         'data_config': {
             'flow_threshold': config.FLOW_THRESHOLD,

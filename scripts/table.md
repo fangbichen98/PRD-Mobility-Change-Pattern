@@ -1,0 +1,17 @@
+Run	状态	标签集	空间模型	节点特征	图模式	边数(2021/2024)	Seed	Epochs	Test Acc (%)	Test F1	说明
+multiscale_temporal_20260314_001506_label_sgh_phase1_small_label_sgh_gine	failed	label_sgh.csv	GINE	ones	full	17114138/15122681	-	-	-	-	未生成 test_results（这条是失败冒烟）
+multiscale_temporal_20260313_234109_label_sgh_phase1_small_label_sgh_gcn	success	label_sgh.csv	GCN	ones	full	17114138/15122681	42	10	51.11	0.4586	phase1 快验
+multiscale_temporal_20260314_002720_label_sgh_phase1_small_label_sgh_gcn	success	label_sgh.csv	GCN	ones	full	17114138/15122681	42	10	67.78	0.6415	phase1 快验
+multiscale_temporal_20260314_003550_label_sgh_phase1_small_label_sgh_sage	success	label_sgh.csv	SAGE	ones	full	17114138/15122681	42	10	58.89	0.5495	phase1 快验
+multiscale_temporal_20260314_003951_labels_sgh_entropy_0.03_random_phase1_small_labels_sgh_entropy_0.03_random_gcn	success	labels_sgh_entropy_0.03_random.csv	GCN	ones	full	17114138/15122681	42	10	43.33	0.3972	phase1 快验
+multiscale_temporal_20260314_011758_labels_sgh_entropy_0.03_random_phase1_small_labels_sgh_entropy_0.03_random_sage	success	labels_sgh_entropy_0.03_random.csv	SAGE	ones	full	17114138/15122681	42	10	53.33	0.4284	phase1 快验
+multiscale_temporal_20260314_110338_labels_sgh_entropy_0.03_random_phase2_dir12_random_full_seed42	success	labels_sgh_entropy_0.03_random.csv	SAGE	ones	full	17114138/15122681	42	10	48.89	0.4344	方向1/2
+multiscale_temporal_20260314_120734_labels_sgh_entropy_0.03_random_phase2_dir12_random_full_seed202	success	labels_sgh_entropy_0.03_random.csv	SAGE	ones	full	17114138/15122681	202	10	52.22	0.4431	方向1/2
+multiscale_temporal_20260314_113733_labels_sgh_entropy_0.03_random_phase2_dir12_random_topk_seed42	success	labels_sgh_entropy_0.03_random.csv	SAGE	ones	topk	1034676/1179275	42	10	48.89	0.4121	方向1/2
+multiscale_temporal_20260314_124107_labels_sgh_entropy_0.03_random_phase2_dir12_random_topk_seed202	success	labels_sgh_entropy_0.03_random.csv	SAGE	ones	topk	1034676/1179275	202	10	55.56	0.4869	方向1/2
+multiscale_temporal_20260314_134103_labels_sgh_entropy_0.03_random_phase2_dir34_random_full_seed42	success	labels_sgh_entropy_0.03_random.csv	SAGE	temporal_mean	full	17114138/15122681	42	10	47.78	0.4282	方向3/4
+multiscale_temporal_20260314_134503_labels_sgh_entropy_0.03_random_phase2_dir34_random_full_seed202	success	labels_sgh_entropy_0.03_random.csv	SAGE	temporal_mean	full	17114138/15122681	202	10	52.22	0.4635	方向3/4
+multiscale_temporal_20260314_134410_labels_sgh_entropy_0.03_random_phase2_dir34_random_topk_seed42	success	labels_sgh_entropy_0.03_random.csv	SAGE	temporal_mean	topk	1034676/1179275	42	10	53.33	0.4682	方向3/4
+multiscale_temporal_20260314_134818_labels_sgh_entropy_0.03_random_phase2_dir34_random_topk_seed202	success	labels_sgh_entropy_0.03_random.csv	SAGE	temporal_mean	topk	1034676/1179275	202	10	55.56	0.4600	方向3/4
+multiscale_temporal_20260314_164354_labels_sgh_entropy_0.03_random_annual_daily_mean_vs_temporalmean_seed42	success	labels_sgh_entropy_0.03_random.csv	SAGE	annual_daily_mean(1d)	topk	1034676/1179275	42	10	47.78	0.3974	你新增的1维年日均
+multiscale_temporal_20260314_164748_labels_sgh_entropy_0.03_random_annual_daily_mean_2d_vs_temporalmean_seed42	success	labels_sgh_entropy_0.03_random.csv	SAGE	annual_daily_mean_2d	topk	1034676/1179275	42	10	48.89	0.3789	你新增的2维年日均
