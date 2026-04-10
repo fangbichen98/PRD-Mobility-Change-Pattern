@@ -628,18 +628,35 @@ class SimplifiedMultiScaleTemporalTransformer(nn.Module):
             weekly_in_dim = input_size * 4
         self.weekly_net = nn.Sequential(
             nn.Linear(weekly_in_dim, 64),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(64, hidden_size)
         )
 
+        # fusion: for absolute year features (t_2021, t_2024)
         self.fusion = nn.Sequential(
             nn.Linear(hidden_size * 3, hidden_size),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout)
         )
 
-    def extract_features_single(self, x):
+        # diff_fusion: dedicated module for intermediate-level delta features (t_diff)
+        # Independent weights avoid gradient conflict between absolute and change objectives.
+        # GELU is required here so negative delta values (flow decreases) are not clipped.
+        self.diff_fusion = nn.Sequential(
+            nn.Linear(hidden_size * 3, hidden_size),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+
+    def extract_subscale_features(self, x):
+        """Extract features at each time scale before fusion.
+
+        Returns:
+            h_hourly: (batch, hidden_size)
+            h_daily:  (batch, hidden_size)
+            h_weekly: (batch, hidden_size)
+        """
         # hourly
         x_hourly = self.pos_hourly(self.in_proj_hourly(x))
         h_hourly = self.hourly_encoder(x_hourly).mean(dim=1)
@@ -670,12 +687,22 @@ class SimplifiedMultiScaleTemporalTransformer(nn.Module):
             weekly_stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
         h_weekly = self.weekly_net(weekly_stats)
 
+        return h_hourly, h_daily, h_weekly
+
+    def extract_features_single(self, x):
+        h_hourly, h_daily, h_weekly = self.extract_subscale_features(x)
         return self.fusion(torch.cat([h_hourly, h_daily, h_weekly], dim=1))
 
     def forward(self, x_2021, x_2024):
-        f21  = self.extract_features_single(x_2021)
-        f24  = self.extract_features_single(x_2024)
-        diff = f24 - f21
+        h_hourly_21, h_daily_21, h_weekly_21 = self.extract_subscale_features(x_2021)
+        h_hourly_24, h_daily_24, h_weekly_24 = self.extract_subscale_features(x_2024)
+        f21  = self.fusion(torch.cat([h_hourly_21, h_daily_21, h_weekly_21], dim=1))
+        f24  = self.fusion(torch.cat([h_hourly_24, h_daily_24, h_weekly_24], dim=1))
+        diff = self.diff_fusion(torch.cat([
+            h_hourly_24 - h_hourly_21,
+            h_daily_24  - h_daily_21,
+            h_weekly_24 - h_weekly_21,
+        ], dim=1))
         return torch.stack([f21, f24, diff], dim=1)
 
 

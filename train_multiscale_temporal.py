@@ -16,10 +16,13 @@ import logging
 from datetime import datetime
 import time
 from sklearn.metrics import f1_score, classification_report, confusion_matrix, cohen_kappa_score
+from sklearn.metrics import f1_score, classification_report, confusion_matrix, cohen_kappa_score
 import json
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import torch.nn.functional as F
 
 import torch.nn.functional as F
 
@@ -49,6 +52,7 @@ class FocalLoss(nn.Module):
         pt = torch.exp(-ce)                         # probability of the correct class
         focal = ((1.0 - pt) ** self.gamma) * ce     # down-weight easy examples
         return focal.mean()
+
 
 # Import Enhanced model with Multi-Scale Temporal Branch
 from src.models.enhanced_dual_branch_model import EnhancedDualBranchModel
@@ -486,10 +490,26 @@ def main():
         config.TEMPORAL_FEATURE_MODE = args.temporal_feature_mode
     if args.daily_agg_mode is not None:
         config.DAILY_AGG_MODE = args.daily_agg_mode
+    if args.gine_use_spatial_coords:
+        config.GINE_USE_SPATIAL_COORDS = True
+    if args.no_gine_spatial_coords:
+        config.GINE_USE_SPATIAL_COORDS = False
+    if args.temporal_feature_mode is not None:
+        config.TEMPORAL_FEATURE_MODE = args.temporal_feature_mode
+    if args.daily_agg_mode is not None:
+        config.DAILY_AGG_MODE = args.daily_agg_mode
     if args.graph_temporal_mode is not None:
         config.GRAPH_TEMPORAL_MODE = args.graph_temporal_mode
     if args.temporal_layers is not None:
         config.LSTM_LAYERS = args.temporal_layers
+    if args.spatial_layers is not None:
+        config.SPATIAL_LAYERS = args.spatial_layers
+    if args.spatial_hidden_size is not None:
+        config.SPATIAL_HIDDEN_SIZE = args.spatial_hidden_size
+    if args.laplacian_pe_dim is not None:
+        config.LAPLACIAN_PE_DIM = args.laplacian_pe_dim
+
+    focal_loss_gamma = args.focal_loss_gamma  # None → CrossEntropy, float → FocalLoss
     if args.spatial_layers is not None:
         config.SPATIAL_LAYERS = args.spatial_layers
     if args.spatial_hidden_size is not None:
@@ -530,6 +550,9 @@ def main():
     logger.info(f"Seed override | random_seed={config.RANDOM_SEED}")
     logger.info(f"Spatial node feature mode | mode={config.SPATIAL_NODE_FEATURE_MODE}")
     logger.info(f"GINE edge feature mode | mode={active_gine_edge_feature_mode}")
+    logger.info(f"Temporal feature mode | mode={getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')}")
+    if getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow') == 'flow_degree_wamd':
+        logger.info(f"Daily agg mode | mode={getattr(config, 'DAILY_AGG_MODE', 'sum')}")
     logger.info(f"Temporal feature mode | mode={getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')}")
     if getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow') == 'flow_degree_wamd':
         logger.info(f"Daily agg mode | mode={getattr(config, 'DAILY_AGG_MODE', 'sum')}")
@@ -586,7 +609,20 @@ def main():
     temporal_features_2024 = {}
 
     _tfm = getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')
+    _tfm = getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')
     for grid_id, features in data['change_features'].items():
+        if _tfm == 'flow_degree_wamd':
+            # (168, 6) = [flow21, degree21, wamd21, flow24, degree24, wamd24]
+            temporal_features_2021[grid_id] = features[:, [0, 1, 2]]  # (168, 3)
+            temporal_features_2024[grid_id] = features[:, [3, 4, 5]]  # (168, 3)
+        elif _tfm == 'flow_wamd_v2':
+            # (168, 4) = [flow21, wamd21, flow24, wamd24]
+            temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
+            temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
+        else:
+            # inflow_outflow / total_wamd: (168, 4) = [feat0_2021, feat1_2021, feat0_2024, feat1_2024]
+            temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
+            temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
         if _tfm == 'flow_degree_wamd':
             # (168, 6) = [flow21, degree21, wamd21, flow24, degree24, wamd24]
             temporal_features_2021[grid_id] = features[:, [0, 1, 2]]  # (168, 3)
@@ -645,7 +681,11 @@ def main():
     # Prepare all temporal features as tensors
     num_nodes = len(data['grid_id_to_idx'])
     # Dynamically infer feature dim from the first sample
+    # Dynamically infer feature dim from the first sample
     first_grid_id = next(iter(temporal_features_2021))
+    feat_dim = torch.tensor(temporal_features_2021[first_grid_id]).shape[-1]
+    # raw temporal always has the per-year dim (2 for inflow_outflow, 3 for flow_degree_wamd)
+    raw_feat_dim = feat_dim
     feat_dim = torch.tensor(temporal_features_2021[first_grid_id]).shape[-1]
     # raw temporal always has the per-year dim (2 for inflow_outflow, 3 for flow_degree_wamd)
     raw_feat_dim = feat_dim
@@ -654,12 +694,24 @@ def main():
     all_temporal_2024 = torch.zeros(num_nodes, 168, feat_dim)
     all_raw_temporal_2021 = torch.zeros(num_nodes, 168, raw_feat_dim)
     all_raw_temporal_2024 = torch.zeros(num_nodes, 168, raw_feat_dim)
+    all_raw_temporal_2021 = torch.zeros(num_nodes, 168, raw_feat_dim)
+    all_raw_temporal_2024 = torch.zeros(num_nodes, 168, raw_feat_dim)
 
     for grid_id, idx in data['grid_id_to_idx'].items():
         if grid_id in temporal_features_2021:
             all_temporal_2021[idx] = torch.tensor(temporal_features_2021[grid_id], dtype=torch.float32)
             all_temporal_2024[idx] = torch.tensor(temporal_features_2024[grid_id], dtype=torch.float32)
         if grid_id in data['flows_2021']:
+            raw_arr_2021 = data['flows_2021'][grid_id]
+            raw_arr_2024 = data['flows_2024'][grid_id]
+            # flows_2021/2024 shape may be (168,2) or (168,3) depending on mode
+            if raw_arr_2021.shape[-1] == raw_feat_dim:
+                all_raw_temporal_2021[idx] = torch.tensor(raw_arr_2021, dtype=torch.float32)
+                all_raw_temporal_2024[idx] = torch.tensor(raw_arr_2024, dtype=torch.float32)
+            else:
+                # fallback: use only first raw_feat_dim columns
+                all_raw_temporal_2021[idx] = torch.tensor(raw_arr_2021[:, :raw_feat_dim], dtype=torch.float32)
+                all_raw_temporal_2024[idx] = torch.tensor(raw_arr_2024[:, :raw_feat_dim], dtype=torch.float32)
             raw_arr_2021 = data['flows_2021'][grid_id]
             raw_arr_2024 = data['flows_2024'][grid_id]
             # flows_2021/2024 shape may be (168,2) or (168,3) depending on mode
@@ -729,6 +781,15 @@ def main():
     else:
         temporal_input_size = config.TEMPORAL_INPUT_SIZE  # default 2
 
+    # Derive temporal_input_size from feature mode
+    _tfm = getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')
+    if _tfm == 'flow_degree_wamd':
+        temporal_input_size = 3  # (168, 3) per year: [flow, degree, wamd]
+    elif _tfm == 'flow_wamd_v2':
+        temporal_input_size = 2  # (168, 2) per year: [flow, wamd]
+    else:
+        temporal_input_size = config.TEMPORAL_INPUT_SIZE  # default 2
+
     model = EnhancedDualBranchModel(
         temporal_input_size=temporal_input_size,
         hidden_size=config.FUSION_HIDDEN_SIZE,
@@ -752,6 +813,57 @@ def main():
                 node_coords[idx, 1] = float(coord_lookup.at[grid_id, 'lat'])
         model.register_node_coords(node_coords)
         logger.info(f"  - Registered spatial coordinates for GINE node features ({node_coords.shape})")
+
+    # Register wamd node features for flow_wamd spatial node feature mode
+    if config.SPATIAL_NODE_FEATURE_MODE == 'flow_wamd':
+        wamd_2021_dict = data.get('wamd_node_features_2021')
+        wamd_2024_dict = data.get('wamd_node_features_2024')
+        if wamd_2021_dict is None or wamd_2024_dict is None:
+            raise ValueError("flow_wamd mode requires TEMPORAL_FEATURE_MODE='total_wamd' to precompute wamd features")
+        grid_id_to_idx = data['grid_id_to_idx']
+        wamd_2021 = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        wamd_2024 = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        for grid_id, idx in grid_id_to_idx.items():
+            if grid_id in wamd_2021_dict:
+                wamd_2021[idx] = torch.from_numpy(wamd_2021_dict[grid_id])
+            if grid_id in wamd_2024_dict:
+                wamd_2024[idx] = torch.from_numpy(wamd_2024_dict[grid_id])
+        model.register_wamd_node_features(wamd_2021, wamd_2024)
+        logger.info(f"  - Registered wamd node features ({wamd_2021.shape})")
+
+    # Register flow+degree+wamd node features for flow_degree_wamd spatial node feature mode
+    if config.SPATIAL_NODE_FEATURE_MODE == 'flow_degree_wamd':
+        fdw_2021_dict = data.get('fdw_node_features_2021')
+        fdw_2024_dict = data.get('fdw_node_features_2024')
+        if fdw_2021_dict is None or fdw_2024_dict is None:
+            raise ValueError("flow_degree_wamd mode requires TEMPORAL_FEATURE_MODE='flow_degree_wamd' to precompute fdw features")
+        grid_id_to_idx = data['grid_id_to_idx']
+        fdw_2021 = torch.zeros(num_nodes, 3, dtype=torch.float32)
+        fdw_2024 = torch.zeros(num_nodes, 3, dtype=torch.float32)
+        for grid_id, idx in grid_id_to_idx.items():
+            if grid_id in fdw_2021_dict:
+                fdw_2021[idx] = torch.from_numpy(fdw_2021_dict[grid_id])
+            if grid_id in fdw_2024_dict:
+                fdw_2024[idx] = torch.from_numpy(fdw_2024_dict[grid_id])
+        model.register_fdw_node_features(fdw_2021, fdw_2024)
+        logger.info(f"  - Registered flow_degree_wamd node features ({fdw_2021.shape})")
+
+    # Register flow+wamd (no degree) node features for flow_wamd_v2 spatial node feature mode
+    if config.SPATIAL_NODE_FEATURE_MODE == 'flow_wamd_v2':
+        fw2_2021_dict = data.get('fdw_node_features_2021')
+        fw2_2024_dict = data.get('fdw_node_features_2024')
+        if fw2_2021_dict is None or fw2_2024_dict is None:
+            raise ValueError("flow_wamd_v2 mode requires TEMPORAL_FEATURE_MODE='flow_wamd_v2' to precompute features")
+        grid_id_to_idx = data['grid_id_to_idx']
+        fw2_2021 = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        fw2_2024 = torch.zeros(num_nodes, 2, dtype=torch.float32)
+        for grid_id, idx in grid_id_to_idx.items():
+            if grid_id in fw2_2021_dict:
+                fw2_2021[idx] = torch.from_numpy(fw2_2021_dict[grid_id])
+            if grid_id in fw2_2024_dict:
+                fw2_2024[idx] = torch.from_numpy(fw2_2024_dict[grid_id])
+        model.register_flow_wamd_v2_node_features(fw2_2021, fw2_2024)
+        logger.info(f"  - Registered flow_wamd_v2 node features ({fw2_2021.shape})")
 
     # Register wamd node features for flow_wamd spatial node feature mode
     if config.SPATIAL_NODE_FEATURE_MODE == 'flow_wamd':
@@ -838,6 +950,12 @@ def main():
     else:
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         loss_desc = "Weighted CrossEntropy"
+    if focal_loss_gamma is not None:
+        criterion = FocalLoss(gamma=focal_loss_gamma, weight=class_weights)
+        loss_desc = f"Focal Loss (gamma={focal_loss_gamma}, weighted)"
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        loss_desc = "Weighted CrossEntropy"
 
     # Optimizer and scheduler
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=config.WEIGHT_DECAY)
@@ -855,6 +973,7 @@ def main():
         f"  - Scheduler: ReduceLROnPlateau (patience={scheduler_patience}, "
         f"factor={scheduler_factor})"
     )
+    logger.info(f"  - Loss: {loss_desc}")
     logger.info(f"  - Loss: {loss_desc}")
 
     # Training loop
@@ -945,9 +1064,13 @@ def main():
     test_kappa = cohen_kappa_score(test_metrics['all_labels'], test_metrics['all_preds'])
     logger.info(f"  - Kappa: {test_kappa:.4f}")
 
+    test_kappa = cohen_kappa_score(test_metrics['all_labels'], test_metrics['all_preds'])
+    logger.info(f"  - Kappa: {test_kappa:.4f}")
+
     test_results = {
         'test_accuracy': float(test_metrics['accuracy']),
         'test_f1': float(test_metrics['f1']),
+        'test_kappa': float(test_kappa),
         'test_kappa': float(test_kappa),
         'improvement': 'Multi-Scale Temporal Branch',
         'data_config': {
@@ -1128,6 +1251,9 @@ def main():
         f.write(f"  Loaded Split Manifest: {split_metadata['source_manifest_path']}\n")
         f.write(f"  Written Split Manifest(s): {', '.join(split_metadata['written_manifest_paths'])}\n")
         f.write(f"  Dropout: {config.LSTM_DROPOUT}\n")
+        f.write(f"  Loss Type: {'focal' if focal_loss_gamma is not None else 'cross_entropy'}\n")
+        if focal_loss_gamma is not None:
+            f.write(f"  Focal Loss Gamma: {focal_loss_gamma}\n")
         f.write(f"  Loss Type: {'focal' if focal_loss_gamma is not None else 'cross_entropy'}\n")
         if focal_loss_gamma is not None:
             f.write(f"  Focal Loss Gamma: {focal_loss_gamma}\n")

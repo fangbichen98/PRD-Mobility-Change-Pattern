@@ -314,7 +314,12 @@ def main():
 
     # ---- load labels ----
     labels_df = pd.read_csv(args.label_path)
-    grid_label = dict(zip(labels_df['grid_id'], labels_df['label_idx']))
+    label_col = 'label_idx' if 'label_idx' in labels_df.columns else 'label'
+    labels = labels_df[label_col].values
+    # Ensure labels are 0-indexed (XGBoost requires [0, num_classes))
+    if labels.min() > 0:
+        labels -= labels.min()
+    grid_label = dict(zip(labels_df['grid_id'], labels))
     all_grid_ids = list(grid_label.keys())
     logger.info(f"Loaded {len(all_grid_ids)} labeled grids from {args.label_path}")
 

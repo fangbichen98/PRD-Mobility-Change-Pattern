@@ -1,0 +1,1369 @@
+2026-04-07 11:31:57,439 - INFO - ================================================================================
+2026-04-07 11:31:57,439 - INFO - Multi-Scale Temporal Branch Training
+2026-04-07 11:31:57,439 - INFO - ================================================================================
+2026-04-07 11:31:57,439 - INFO - Training started at: 2026-04-07 11:31:57
+2026-04-07 11:31:57,439 - INFO - 
+Improvement: Multi-Scale Temporal Branch (hourly + daily + weekly)
+2026-04-07 11:31:57,439 - INFO - Dataset: data/sampled_labels_spc250_seed202_reconstructed.csv with flow threshold 0.0 and 168 time steps
+2026-04-07 11:31:57,439 - INFO - Runtime overrides | spatial_model=GINE, samples_per_class=None, epochs=300, batch_size=12, lr=0.0001, grad_accum=4, early_stop=30, use_cache=True
+2026-04-07 11:31:57,439 - INFO - Temporal override | temporal_model=TRANSFORMER
+2026-04-07 11:31:57,440 - INFO - Temporal layer override | layers=3
+2026-04-07 11:31:57,440 - INFO - Graph overrides | topk_out=20, topk_in=20, topk_enabled=True
+2026-04-07 11:31:57,440 - INFO - Graph temporal mode | mode=static
+2026-04-07 11:31:57,440 - INFO - Seed override | random_seed=202
+2026-04-07 11:31:57,440 - INFO - Spatial node feature mode | mode=raw_temporal_mean
+2026-04-07 11:31:57,440 - INFO - GINE edge feature mode | mode=flow_distance_direction
+2026-04-07 11:31:57,440 - INFO - Temporal feature mode | mode=inflow_outflow
+2026-04-07 11:31:57,440 - INFO - Temporal feature mode | mode=inflow_outflow
+2026-04-07 11:31:57,440 - INFO - Split manifest | load=None, export=None
+2026-04-07 11:31:57,440 - INFO - Branch ablation mode | mode=full
+2026-04-07 11:31:57,440 - INFO - Fusion ablation mode | mode=gated
+2026-04-07 11:31:57,440 - INFO - 
+Output directory: outputs/multiscale_temporal_20260407_113157_sampled_labels_spc250_seed202_reconstructed_phase50_spc250_delta_mean
+2026-04-07 11:31:57,440 - INFO - Log file: outputs/multiscale_temporal_20260407_113157_sampled_labels_spc250_seed202_reconstructed_phase50_spc250_delta_mean/training.log
+2026-04-07 11:31:57,440 - INFO - 
+================================================================================
+2026-04-07 11:31:57,440 - INFO - Step 1: Loading data
+2026-04-07 11:31:57,440 - INFO - ================================================================================
+2026-04-07 11:31:57,441 - INFO - ================================================================================
+2026-04-07 11:31:57,441 - INFO - Dual-Year Experiment Data Preparation
+2026-04-07 11:31:57,442 - INFO - ================================================================================
+2026-04-07 11:31:57,442 - INFO - Label file: data/sampled_labels_spc250_seed202_reconstructed.csv
+2026-04-07 11:31:57,442 - INFO - Samples per class: ALL
+2026-04-07 11:31:57,442 - INFO - 
+2026-04-07 11:31:57,442 - INFO - Loading grid metadata...
+2026-04-07 11:31:57,442 - INFO - Loading grid metadata from data/grid_metadata/sgh_grid_metadata.csv
+2026-04-07 11:31:57,505 - INFO - Loaded 65049 valid grid cells
+2026-04-07 11:31:57,511 - INFO - ================================================================================
+2026-04-07 11:31:57,511 - INFO - Loading Feature Cache (Level-1)
+2026-04-07 11:31:57,511 - INFO - ================================================================================
+2026-04-07 11:31:57,511 - INFO - Feature cache file: data/cache/features/dual_year_features_5cbe7fef1f87.pkl
+/opt/conda/lib/python3.11/site-packages/torch/storage.py:414: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  return torch.load(io.BytesIO(b))
+2026-04-07 11:31:57,551 - INFO - ✓ Feature cache hit
+2026-04-07 11:31:57,551 - INFO -   - Total labeled grids: 2250
+2026-04-07 11:31:57,551 - INFO - Building/loading spatial graphs...
+2026-04-07 11:31:57,551 - INFO - CRITICAL FIX: Using GLOBAL metadata (all 65049 grids)
+2026-04-07 11:31:57,659 - INFO - ================================================================================
+2026-04-07 11:31:57,659 - INFO - Loading Graph Cache (Level-2 variant)
+2026-04-07 11:31:57,659 - INFO - ================================================================================
+2026-04-07 11:31:57,659 - INFO - Graph cache file: data/cache/graphs/dual_year_graph_variant_0e1f7f20f21e.pkl
+2026-04-07 11:31:57,718 - INFO - ✓ Graph variant cache hit
+2026-04-07 11:31:57,719 - INFO - 
+✓ CRITICAL FIX APPLIED:
+2026-04-07 11:31:57,719 - INFO -   - Global graph nodes: 65049 (from 65049 metadata)
+2026-04-07 11:31:57,719 - INFO -   - Labeled nodes for training: 2250
+2026-04-07 11:31:57,719 - INFO -   - Unlabeled nodes in graph: 62799
+2026-04-07 11:31:57,719 - INFO -   - Graph temporal mode: static
+2026-04-07 11:31:57,719 - INFO -   - Graph edge feature mode: flow_distance_direction
+2026-04-07 11:31:57,719 - INFO -   - Graph snapshots per year: 1
+2026-04-07 11:31:57,719 - INFO -   - Graph 2021 edges (snapshot0): 1034676
+2026-04-07 11:31:57,719 - INFO -   - Graph 2024 edges (snapshot0): 1179275
+2026-04-07 11:31:57,719 - INFO - 
+Architecture:
+2026-04-07 11:31:57,719 - INFO -   - Temporal Branch (LSTM): Uses 2250 labeled nodes with (168, 2) features
+2026-04-07 11:31:57,719 - INFO -   - Spatial Branch (GCN/SAGE): Uses 65049 nodes with all-1 features
+2026-04-07 11:31:57,719 - INFO -   - Feature dimension per labeled node: (168, 4)
+2026-04-07 11:31:57,719 - INFO - 
+Two-level cache summary:
+2026-04-07 11:31:57,720 - INFO -   - Feature cache: data/cache/features/dual_year_features_5cbe7fef1f87.pkl
+2026-04-07 11:31:57,720 - INFO -   - Graph base cache: data/cache/graphs/dual_year_graph_base_d4d046bfdc14.pkl
+2026-04-07 11:31:57,720 - INFO -   - Graph variant cache: data/cache/graphs/dual_year_graph_variant_0e1f7f20f21e.pkl
+2026-04-07 11:31:57,727 - INFO - ✓ Data loaded successfully
+2026-04-07 11:31:57,727 - INFO -   - Total grids: 2250
+2026-04-07 11:31:57,727 - INFO -   - Feature shape: (168, 4)
+2026-04-07 11:31:57,727 - INFO -   - Graph 2021 edges: 1034676
+2026-04-07 11:31:57,727 - INFO -   - Graph 2024 edges: 1179275
+2026-04-07 11:31:57,727 - INFO -   - Graph edge feature mode: flow_distance_direction
+2026-04-07 11:31:57,727 - INFO - 
+================================================================================
+2026-04-07 11:31:57,727 - INFO - Step 2: Preparing temporal features
+2026-04-07 11:31:57,727 - INFO - ================================================================================
+2026-04-07 11:31:57,765 - INFO - ✓ Temporal features prepared
+2026-04-07 11:31:57,766 - INFO - 
+================================================================================
+2026-04-07 11:31:57,766 - INFO - Step 3: Creating dataset
+2026-04-07 11:31:57,766 - INFO - ================================================================================
+2026-04-07 11:31:57,766 - INFO - ✓ Dataset created: 2250 samples
+2026-04-07 11:31:57,768 - INFO -   - Split Source: seeded_random_split
+2026-04-07 11:31:57,769 - INFO -   - Wrote Split Manifest: outputs/multiscale_temporal_20260407_113157_sampled_labels_spc250_seed202_reconstructed_phase50_spc250_delta_mean/metrics/split_manifest.json
+2026-04-07 11:31:57,769 - INFO -   - Train: 1575 samples
+2026-04-07 11:31:57,769 - INFO -   - Val: 225 samples
+2026-04-07 11:31:57,769 - INFO -   - Test: 450 samples
+2026-04-07 11:31:58,087 - INFO - ✓ Data loaders created
+2026-04-07 11:31:58,087 - INFO - 
+================================================================================
+2026-04-07 11:31:58,087 - INFO - Step 4: Creating Enhanced Model
+2026-04-07 11:31:58,087 - INFO - ================================================================================
+2026-04-07 11:31:58,087 - INFO - Using device: cuda
+2026-04-07 11:31:58,087 - INFO - Spatial model: GINE
+2026-04-07 11:31:58,087 - INFO - Temporal model: TRANSFORMER
+2026-04-07 11:32:00,245 - INFO -   - Registered spatial coordinates for GINE node features (torch.Size([65049, 2]))
+2026-04-07 11:32:00,533 - INFO - ✓ Enhanced model created
+2026-04-07 11:32:00,533 - INFO -   - Total parameters: 5,041,038
+2026-04-07 11:32:00,533 - INFO -   - Trainable parameters: 5,041,038
+2026-04-07 11:32:00,533 - INFO -   - Multi-scale temporal: Hourly + Daily + Weekly
+2026-04-07 11:32:00,533 - INFO -   - Temporal branch model: TRANSFORMER
+2026-04-07 11:32:00,533 - INFO -   - Spatial branch: GINE
+2026-04-07 11:32:00,533 - INFO -   - Laplacian PE dimension: 8
+2026-04-07 11:32:00,533 - INFO -   - Branch ablation mode: full
+2026-04-07 11:32:00,533 - INFO -   - Fusion ablation mode: gated
+2026-04-07 11:32:00,533 - INFO - 
+================================================================================
+2026-04-07 11:32:00,534 - INFO - Step 5: Setting up training
+2026-04-07 11:32:00,534 - INFO - ================================================================================
+/opt/conda/lib/python3.11/site-packages/torch/optim/lr_scheduler.py:60: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
+2026-04-07 11:32:00,536 - INFO - ✓ Training setup complete
+2026-04-07 11:32:00,536 - INFO -   - Optimizer: Adam (lr=0.0001, wd=0.001)
+2026-04-07 11:32:00,536 - INFO -   - Scheduler: ReduceLROnPlateau (patience=5, factor=0.5)
+2026-04-07 11:32:00,536 - INFO -   - Loss: Weighted CrossEntropy
+2026-04-07 11:32:00,537 - INFO -   - Loss: Weighted CrossEntropy
+2026-04-07 11:32:00,537 - INFO - 
+================================================================================
+2026-04-07 11:32:00,537 - INFO - Step 6: Training
+2026-04-07 11:32:00,537 - INFO - ================================================================================
+2026-04-07 11:32:00,537 - INFO - 
+Epoch 1/300
+/workspace/Graph_Deep_Learning/20251001-PRD_18-21-24-mobility_change_pattern/analysis/PRD-Mobility-Change-Pattern/src/models/enhanced_dual_branch_model.py:517: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  cached = torch.load(cache_path, map_location='cpu')
+2026-04-07 11:32:02,897 - INFO -   Epoch [10/132] Loss: 2.1829
+2026-04-07 11:32:04,632 - INFO -   Epoch [20/132] Loss: 2.0300
+2026-04-07 11:32:06,354 - INFO -   Epoch [30/132] Loss: 2.1166
+2026-04-07 11:32:08,075 - INFO -   Epoch [40/132] Loss: 1.9391
+2026-04-07 11:32:09,785 - INFO -   Epoch [50/132] Loss: 1.8553
+2026-04-07 11:32:11,512 - INFO -   Epoch [60/132] Loss: 1.7943
+2026-04-07 11:32:13,232 - INFO -   Epoch [70/132] Loss: 1.9939
+2026-04-07 11:32:14,986 - INFO -   Epoch [80/132] Loss: 1.7115
+2026-04-07 11:32:16,727 - INFO -   Epoch [90/132] Loss: 1.9758
+2026-04-07 11:32:18,455 - INFO -   Epoch [100/132] Loss: 1.7180
+2026-04-07 11:32:20,215 - INFO -   Epoch [110/132] Loss: 1.9512
+2026-04-07 11:32:21,980 - INFO -   Epoch [120/132] Loss: 2.0290
+2026-04-07 11:32:23,723 - INFO -   Epoch [130/132] Loss: 1.5469
+2026-04-07 11:32:25,160 - INFO -   Train Loss: 1.9492
+2026-04-07 11:32:25,160 - INFO -   Train Accuracy: 29.33%
+2026-04-07 11:32:25,160 - INFO -   Val Loss: 1.6094
+2026-04-07 11:32:25,160 - INFO -   Val Accuracy: 44.44% | F1: 0.3677
+2026-04-07 11:32:25,160 - INFO -   LR: 0.000100
+2026-04-07 11:32:25,264 - INFO -   ✓ New best model saved! (Acc: 44.44%)
+2026-04-07 11:32:25,265 - INFO -   Patience: 0/30
+2026-04-07 11:32:25,265 - INFO - 
+Epoch 2/300
+2026-04-07 11:32:27,018 - INFO -   Epoch [10/132] Loss: 2.0468
+2026-04-07 11:32:28,758 - INFO -   Epoch [20/132] Loss: 1.8205
+2026-04-07 11:32:30,486 - INFO -   Epoch [30/132] Loss: 1.7023
+2026-04-07 11:32:32,221 - INFO -   Epoch [40/132] Loss: 1.4985
+2026-04-07 11:32:33,963 - INFO -   Epoch [50/132] Loss: 1.5878
+2026-04-07 11:32:35,694 - INFO -   Epoch [60/132] Loss: 2.1756
+2026-04-07 11:32:37,434 - INFO -   Epoch [70/132] Loss: 1.5977
+2026-04-07 11:32:39,192 - INFO -   Epoch [80/132] Loss: 1.8910
+2026-04-07 11:32:40,923 - INFO -   Epoch [90/132] Loss: 1.4761
+2026-04-07 11:32:42,650 - INFO -   Epoch [100/132] Loss: 1.8848
+2026-04-07 11:32:44,368 - INFO -   Epoch [110/132] Loss: 1.3775
+2026-04-07 11:32:46,121 - INFO -   Epoch [120/132] Loss: 1.6739
+2026-04-07 11:32:47,862 - INFO -   Epoch [130/132] Loss: 1.4063
+2026-04-07 11:32:49,242 - INFO -   Train Loss: 1.5981
+2026-04-07 11:32:49,243 - INFO -   Train Accuracy: 44.44%
+2026-04-07 11:32:49,243 - INFO -   Val Loss: 1.2369
+2026-04-07 11:32:49,243 - INFO -   Val Accuracy: 62.67% | F1: 0.6139
+2026-04-07 11:32:49,243 - INFO -   LR: 0.000100
+2026-04-07 11:32:49,609 - INFO -   ✓ New best model saved! (Acc: 62.67%)
+2026-04-07 11:32:49,609 - INFO -   Patience: 0/30
+2026-04-07 11:32:49,609 - INFO - 
+Epoch 3/300
+2026-04-07 11:32:51,356 - INFO -   Epoch [10/132] Loss: 1.2192
+2026-04-07 11:32:53,106 - INFO -   Epoch [20/132] Loss: 1.2268
+2026-04-07 11:32:54,838 - INFO -   Epoch [30/132] Loss: 1.3608
+2026-04-07 11:32:56,582 - INFO -   Epoch [40/132] Loss: 1.3959
+2026-04-07 11:32:58,332 - INFO -   Epoch [50/132] Loss: 1.0896
+2026-04-07 11:33:00,079 - INFO -   Epoch [60/132] Loss: 1.1379
+2026-04-07 11:33:01,826 - INFO -   Epoch [70/132] Loss: 1.1536
+2026-04-07 11:33:03,607 - INFO -   Epoch [80/132] Loss: 1.3196
+2026-04-07 11:33:05,339 - INFO -   Epoch [90/132] Loss: 1.3161
+2026-04-07 11:33:07,091 - INFO -   Epoch [100/132] Loss: 1.3466
+2026-04-07 11:33:08,865 - INFO -   Epoch [110/132] Loss: 0.9622
+2026-04-07 11:33:10,626 - INFO -   Epoch [120/132] Loss: 0.9841
+2026-04-07 11:33:12,359 - INFO -   Epoch [130/132] Loss: 1.3928
+2026-04-07 11:33:13,743 - INFO -   Train Loss: 1.2891
+2026-04-07 11:33:13,743 - INFO -   Train Accuracy: 57.02%
+2026-04-07 11:33:13,743 - INFO -   Val Loss: 1.0729
+2026-04-07 11:33:13,743 - INFO -   Val Accuracy: 62.22% | F1: 0.6205
+2026-04-07 11:33:13,744 - INFO -   LR: 0.000100
+2026-04-07 11:33:13,744 - INFO -   Patience: 1/30
+2026-04-07 11:33:13,744 - INFO - 
+Epoch 4/300
+2026-04-07 11:33:15,504 - INFO -   Epoch [10/132] Loss: 1.7153
+2026-04-07 11:33:17,261 - INFO -   Epoch [20/132] Loss: 1.3275
+2026-04-07 11:33:19,038 - INFO -   Epoch [30/132] Loss: 0.9865
+2026-04-07 11:33:20,761 - INFO -   Epoch [40/132] Loss: 1.2138
+2026-04-07 11:33:22,500 - INFO -   Epoch [50/132] Loss: 1.1451
+2026-04-07 11:33:24,250 - INFO -   Epoch [60/132] Loss: 1.6309
+2026-04-07 11:33:25,988 - INFO -   Epoch [70/132] Loss: 1.2287
+2026-04-07 11:33:27,727 - INFO -   Epoch [80/132] Loss: 0.9962
+2026-04-07 11:33:29,469 - INFO -   Epoch [90/132] Loss: 1.5378
+2026-04-07 11:33:31,269 - INFO -   Epoch [100/132] Loss: 1.1565
+2026-04-07 11:33:32,998 - INFO -   Epoch [110/132] Loss: 1.0969
+2026-04-07 11:33:34,732 - INFO -   Epoch [120/132] Loss: 1.0287
+2026-04-07 11:33:36,500 - INFO -   Epoch [130/132] Loss: 1.0931
+2026-04-07 11:33:37,855 - INFO -   Train Loss: 1.1447
+2026-04-07 11:33:37,855 - INFO -   Train Accuracy: 60.25%
+2026-04-07 11:33:37,855 - INFO -   Val Loss: 0.9289
+2026-04-07 11:33:37,855 - INFO -   Val Accuracy: 66.22% | F1: 0.6568
+2026-04-07 11:33:37,855 - INFO -   LR: 0.000100
+2026-04-07 11:33:38,157 - INFO -   ✓ New best model saved! (Acc: 66.22%)
+2026-04-07 11:33:38,158 - INFO -   Patience: 0/30
+2026-04-07 11:33:38,158 - INFO - 
+Epoch 5/300
+2026-04-07 11:33:40,033 - INFO -   Epoch [10/132] Loss: 0.6548
+2026-04-07 11:33:41,858 - INFO -   Epoch [20/132] Loss: 0.7334
+2026-04-07 11:33:43,619 - INFO -   Epoch [30/132] Loss: 0.6604
+2026-04-07 11:33:45,401 - INFO -   Epoch [40/132] Loss: 1.3699
+2026-04-07 11:33:47,158 - INFO -   Epoch [50/132] Loss: 0.8088
+2026-04-07 11:33:48,904 - INFO -   Epoch [60/132] Loss: 1.3638
+2026-04-07 11:33:50,669 - INFO -   Epoch [70/132] Loss: 1.3486
+2026-04-07 11:33:52,410 - INFO -   Epoch [80/132] Loss: 0.9442
+2026-04-07 11:33:54,146 - INFO -   Epoch [90/132] Loss: 1.1656
+2026-04-07 11:33:55,912 - INFO -   Epoch [100/132] Loss: 1.2014
+2026-04-07 11:33:57,640 - INFO -   Epoch [110/132] Loss: 1.0526
+2026-04-07 11:33:59,368 - INFO -   Epoch [120/132] Loss: 0.9122
+2026-04-07 11:34:01,107 - INFO -   Epoch [130/132] Loss: 0.6981
+2026-04-07 11:34:02,474 - INFO -   Train Loss: 1.0512
+2026-04-07 11:34:02,474 - INFO -   Train Accuracy: 63.24%
+2026-04-07 11:34:02,474 - INFO -   Val Loss: 0.8776
+2026-04-07 11:34:02,474 - INFO -   Val Accuracy: 69.33% | F1: 0.6867
+2026-04-07 11:34:02,474 - INFO -   LR: 0.000100
+2026-04-07 11:34:02,930 - INFO -   ✓ New best model saved! (Acc: 69.33%)
+2026-04-07 11:34:02,931 - INFO -   Patience: 0/30
+2026-04-07 11:34:02,931 - INFO - 
+Epoch 6/300
+2026-04-07 11:34:04,664 - INFO -   Epoch [10/132] Loss: 0.4994
+2026-04-07 11:34:06,404 - INFO -   Epoch [20/132] Loss: 0.9752
+2026-04-07 11:34:08,136 - INFO -   Epoch [30/132] Loss: 0.8422
+2026-04-07 11:34:09,891 - INFO -   Epoch [40/132] Loss: 0.7547
+2026-04-07 11:34:11,639 - INFO -   Epoch [50/132] Loss: 0.8452
+2026-04-07 11:34:13,383 - INFO -   Epoch [60/132] Loss: 1.0639
+2026-04-07 11:34:15,114 - INFO -   Epoch [70/132] Loss: 0.9061
+2026-04-07 11:34:16,847 - INFO -   Epoch [80/132] Loss: 0.8784
+2026-04-07 11:34:18,595 - INFO -   Epoch [90/132] Loss: 0.9694
+2026-04-07 11:34:20,350 - INFO -   Epoch [100/132] Loss: 0.9542
+2026-04-07 11:34:22,079 - INFO -   Epoch [110/132] Loss: 1.1950
+2026-04-07 11:34:23,828 - INFO -   Epoch [120/132] Loss: 0.9474
+2026-04-07 11:34:25,576 - INFO -   Epoch [130/132] Loss: 0.8423
+2026-04-07 11:34:26,949 - INFO -   Train Loss: 0.9898
+2026-04-07 11:34:26,949 - INFO -   Train Accuracy: 63.43%
+2026-04-07 11:34:26,949 - INFO -   Val Loss: 0.8498
+2026-04-07 11:34:26,949 - INFO -   Val Accuracy: 67.56% | F1: 0.6734
+2026-04-07 11:34:26,949 - INFO -   LR: 0.000100
+2026-04-07 11:34:26,949 - INFO -   Patience: 1/30
+2026-04-07 11:34:26,949 - INFO - 
+Epoch 7/300
+2026-04-07 11:34:28,695 - INFO -   Epoch [10/132] Loss: 0.8576
+2026-04-07 11:34:30,434 - INFO -   Epoch [20/132] Loss: 1.2651
+2026-04-07 11:34:32,175 - INFO -   Epoch [30/132] Loss: 0.8400
+2026-04-07 11:34:33,900 - INFO -   Epoch [40/132] Loss: 0.9508
+2026-04-07 11:34:35,624 - INFO -   Epoch [50/132] Loss: 1.3495
+2026-04-07 11:34:37,365 - INFO -   Epoch [60/132] Loss: 0.8064
+2026-04-07 11:34:39,133 - INFO -   Epoch [70/132] Loss: 1.1461
+2026-04-07 11:34:40,871 - INFO -   Epoch [80/132] Loss: 0.9580
+2026-04-07 11:34:42,607 - INFO -   Epoch [90/132] Loss: 1.0581
+2026-04-07 11:34:44,332 - INFO -   Epoch [100/132] Loss: 0.8057
+2026-04-07 11:34:46,068 - INFO -   Epoch [110/132] Loss: 0.5611
+2026-04-07 11:34:47,843 - INFO -   Epoch [120/132] Loss: 0.7903
+2026-04-07 11:34:49,587 - INFO -   Epoch [130/132] Loss: 0.5586
+2026-04-07 11:34:50,985 - INFO -   Train Loss: 0.9625
+2026-04-07 11:34:50,985 - INFO -   Train Accuracy: 64.19%
+2026-04-07 11:34:50,985 - INFO -   Val Loss: 0.8555
+2026-04-07 11:34:50,985 - INFO -   Val Accuracy: 65.78% | F1: 0.6493
+2026-04-07 11:34:50,985 - INFO -   LR: 0.000100
+2026-04-07 11:34:50,985 - INFO -   Patience: 2/30
+2026-04-07 11:34:50,985 - INFO - 
+Epoch 8/300
+2026-04-07 11:34:52,749 - INFO -   Epoch [10/132] Loss: 1.7021
+2026-04-07 11:34:54,506 - INFO -   Epoch [20/132] Loss: 1.5231
+2026-04-07 11:34:56,232 - INFO -   Epoch [30/132] Loss: 0.5764
+2026-04-07 11:34:57,951 - INFO -   Epoch [40/132] Loss: 1.2382
+2026-04-07 11:34:59,717 - INFO -   Epoch [50/132] Loss: 0.5873
+2026-04-07 11:35:01,457 - INFO -   Epoch [60/132] Loss: 0.6142
+2026-04-07 11:35:03,212 - INFO -   Epoch [70/132] Loss: 0.9431
+2026-04-07 11:35:04,940 - INFO -   Epoch [80/132] Loss: 0.6459
+2026-04-07 11:35:06,669 - INFO -   Epoch [90/132] Loss: 1.5786
+2026-04-07 11:35:08,498 - INFO -   Epoch [100/132] Loss: 0.8231
+2026-04-07 11:35:10,267 - INFO -   Epoch [110/132] Loss: 0.9354
+2026-04-07 11:35:11,986 - INFO -   Epoch [120/132] Loss: 0.9813
+2026-04-07 11:35:13,733 - INFO -   Epoch [130/132] Loss: 0.6924
+2026-04-07 11:35:15,108 - INFO -   Train Loss: 0.9332
+2026-04-07 11:35:15,108 - INFO -   Train Accuracy: 65.27%
+2026-04-07 11:35:15,108 - INFO -   Val Loss: 0.7697
+2026-04-07 11:35:15,108 - INFO -   Val Accuracy: 70.67% | F1: 0.7007
+2026-04-07 11:35:15,108 - INFO -   LR: 0.000100
+2026-04-07 11:35:15,441 - INFO -   ✓ New best model saved! (Acc: 70.67%)
+2026-04-07 11:35:15,441 - INFO -   Patience: 0/30
+2026-04-07 11:35:15,442 - INFO - 
+Epoch 9/300
+2026-04-07 11:35:17,186 - INFO -   Epoch [10/132] Loss: 1.0331
+2026-04-07 11:35:18,997 - INFO -   Epoch [20/132] Loss: 0.7972
+2026-04-07 11:35:20,867 - INFO -   Epoch [30/132] Loss: 0.6618
+2026-04-07 11:35:22,608 - INFO -   Epoch [40/132] Loss: 1.0337
+2026-04-07 11:35:24,411 - INFO -   Epoch [50/132] Loss: 1.3777
+2026-04-07 11:35:26,147 - INFO -   Epoch [60/132] Loss: 0.5081
+2026-04-07 11:35:27,883 - INFO -   Epoch [70/132] Loss: 0.7124
+2026-04-07 11:35:29,696 - INFO -   Epoch [80/132] Loss: 0.8047
+2026-04-07 11:35:31,507 - INFO -   Epoch [90/132] Loss: 1.2608
+2026-04-07 11:35:33,250 - INFO -   Epoch [100/132] Loss: 1.1371
+2026-04-07 11:35:35,066 - INFO -   Epoch [110/132] Loss: 0.9473
+2026-04-07 11:35:36,808 - INFO -   Epoch [120/132] Loss: 0.9739
+2026-04-07 11:35:38,626 - INFO -   Epoch [130/132] Loss: 1.1505
+2026-04-07 11:35:40,115 - INFO -   Train Loss: 0.8910
+2026-04-07 11:35:40,116 - INFO -   Train Accuracy: 66.48%
+2026-04-07 11:35:40,116 - INFO -   Val Loss: 0.7511
+2026-04-07 11:35:40,116 - INFO -   Val Accuracy: 71.11% | F1: 0.7092
+2026-04-07 11:35:40,116 - INFO -   LR: 0.000100
+2026-04-07 11:35:40,499 - INFO -   ✓ New best model saved! (Acc: 71.11%)
+2026-04-07 11:35:40,499 - INFO -   Patience: 0/30
+2026-04-07 11:35:40,499 - INFO - 
+Epoch 10/300
+2026-04-07 11:35:42,405 - INFO -   Epoch [10/132] Loss: 0.9140
+2026-04-07 11:35:44,284 - INFO -   Epoch [20/132] Loss: 0.9667
+2026-04-07 11:35:46,062 - INFO -   Epoch [30/132] Loss: 0.6420
+2026-04-07 11:35:47,948 - INFO -   Epoch [40/132] Loss: 0.9337
+2026-04-07 11:35:49,749 - INFO -   Epoch [50/132] Loss: 0.9170
+2026-04-07 11:35:51,601 - INFO -   Epoch [60/132] Loss: 0.6933
+2026-04-07 11:35:53,372 - INFO -   Epoch [70/132] Loss: 1.0291
+2026-04-07 11:35:55,185 - INFO -   Epoch [80/132] Loss: 1.0534
+2026-04-07 11:35:56,948 - INFO -   Epoch [90/132] Loss: 0.8109
+2026-04-07 11:35:58,740 - INFO -   Epoch [100/132] Loss: 0.5854
+2026-04-07 11:36:00,485 - INFO -   Epoch [110/132] Loss: 0.8504
+2026-04-07 11:36:02,287 - INFO -   Epoch [120/132] Loss: 1.0266
+2026-04-07 11:36:04,016 - INFO -   Epoch [130/132] Loss: 1.0672
+2026-04-07 11:36:05,401 - INFO -   Train Loss: 0.8661
+2026-04-07 11:36:05,401 - INFO -   Train Accuracy: 65.71%
+2026-04-07 11:36:05,401 - INFO -   Val Loss: 0.7182
+2026-04-07 11:36:05,401 - INFO -   Val Accuracy: 74.22% | F1: 0.7444
+2026-04-07 11:36:05,401 - INFO -   LR: 0.000100
+2026-04-07 11:36:05,768 - INFO -   ✓ New best model saved! (Acc: 74.22%)
+2026-04-07 11:36:05,769 - INFO -   Patience: 0/30
+2026-04-07 11:36:05,769 - INFO - 
+Epoch 11/300
+2026-04-07 11:36:07,695 - INFO -   Epoch [10/132] Loss: 1.1728
+2026-04-07 11:36:09,524 - INFO -   Epoch [20/132] Loss: 0.7290
+2026-04-07 11:36:11,262 - INFO -   Epoch [30/132] Loss: 0.4036
+2026-04-07 11:36:13,059 - INFO -   Epoch [40/132] Loss: 0.6006
+2026-04-07 11:36:14,842 - INFO -   Epoch [50/132] Loss: 0.7546
+2026-04-07 11:36:16,598 - INFO -   Epoch [60/132] Loss: 0.5585
+2026-04-07 11:36:18,389 - INFO -   Epoch [70/132] Loss: 0.3863
+2026-04-07 11:36:20,185 - INFO -   Epoch [80/132] Loss: 0.7778
+2026-04-07 11:36:21,918 - INFO -   Epoch [90/132] Loss: 0.7121
+2026-04-07 11:36:23,753 - INFO -   Epoch [100/132] Loss: 0.9569
+2026-04-07 11:36:25,490 - INFO -   Epoch [110/132] Loss: 1.2391
+2026-04-07 11:36:27,232 - INFO -   Epoch [120/132] Loss: 1.0223
+2026-04-07 11:36:29,058 - INFO -   Epoch [130/132] Loss: 0.8312
+2026-04-07 11:36:30,546 - INFO -   Train Loss: 0.8533
+2026-04-07 11:36:30,580 - INFO -   Train Accuracy: 67.24%
+2026-04-07 11:36:30,580 - INFO -   Val Loss: 0.7007
+2026-04-07 11:36:30,580 - INFO -   Val Accuracy: 72.89% | F1: 0.7252
+2026-04-07 11:36:30,580 - INFO -   LR: 0.000100
+2026-04-07 11:36:30,580 - INFO -   Patience: 1/30
+2026-04-07 11:36:30,580 - INFO - 
+Epoch 12/300
+2026-04-07 11:36:32,300 - INFO -   Epoch [10/132] Loss: 0.9587
+2026-04-07 11:36:34,125 - INFO -   Epoch [20/132] Loss: 1.2230
+2026-04-07 11:36:35,834 - INFO -   Epoch [30/132] Loss: 0.9299
+2026-04-07 11:36:37,589 - INFO -   Epoch [40/132] Loss: 0.8385
+2026-04-07 11:36:39,423 - INFO -   Epoch [50/132] Loss: 0.7954
+2026-04-07 11:36:41,161 - INFO -   Epoch [60/132] Loss: 0.8649
+2026-04-07 11:36:42,897 - INFO -   Epoch [70/132] Loss: 0.8582
+2026-04-07 11:36:44,640 - INFO -   Epoch [80/132] Loss: 0.5187
+2026-04-07 11:36:46,416 - INFO -   Epoch [90/132] Loss: 0.5393
+2026-04-07 11:36:48,168 - INFO -   Epoch [100/132] Loss: 1.1610
+2026-04-07 11:36:49,912 - INFO -   Epoch [110/132] Loss: 0.6011
+2026-04-07 11:36:51,665 - INFO -   Epoch [120/132] Loss: 0.9402
+2026-04-07 11:36:53,398 - INFO -   Epoch [130/132] Loss: 0.8091
+2026-04-07 11:36:54,751 - INFO -   Train Loss: 0.8225
+2026-04-07 11:36:54,751 - INFO -   Train Accuracy: 67.49%
+2026-04-07 11:36:54,752 - INFO -   Val Loss: 0.6891
+2026-04-07 11:36:54,752 - INFO -   Val Accuracy: 72.89% | F1: 0.7247
+2026-04-07 11:36:54,752 - INFO -   LR: 0.000100
+2026-04-07 11:36:54,752 - INFO -   Patience: 2/30
+2026-04-07 11:36:54,752 - INFO - 
+Epoch 13/300
+2026-04-07 11:36:56,486 - INFO -   Epoch [10/132] Loss: 0.6961
+2026-04-07 11:36:58,227 - INFO -   Epoch [20/132] Loss: 0.6151
+2026-04-07 11:36:59,968 - INFO -   Epoch [30/132] Loss: 1.0138
+2026-04-07 11:37:01,778 - INFO -   Epoch [40/132] Loss: 1.2660
+2026-04-07 11:37:03,502 - INFO -   Epoch [50/132] Loss: 0.8638
+2026-04-07 11:37:05,250 - INFO -   Epoch [60/132] Loss: 1.4633
+2026-04-07 11:37:07,002 - INFO -   Epoch [70/132] Loss: 1.0851
+2026-04-07 11:37:08,718 - INFO -   Epoch [80/132] Loss: 0.5668
+2026-04-07 11:37:10,458 - INFO -   Epoch [90/132] Loss: 0.7831
+2026-04-07 11:37:12,243 - INFO -   Epoch [100/132] Loss: 0.7088
+2026-04-07 11:37:13,964 - INFO -   Epoch [110/132] Loss: 0.6607
+2026-04-07 11:37:15,688 - INFO -   Epoch [120/132] Loss: 1.0284
+2026-04-07 11:37:17,424 - INFO -   Epoch [130/132] Loss: 0.6570
+2026-04-07 11:37:18,842 - INFO -   Train Loss: 0.8208
+2026-04-07 11:37:18,842 - INFO -   Train Accuracy: 68.70%
+2026-04-07 11:37:18,842 - INFO -   Val Loss: 0.6978
+2026-04-07 11:37:18,842 - INFO -   Val Accuracy: 72.00% | F1: 0.7118
+2026-04-07 11:37:18,842 - INFO -   LR: 0.000100
+2026-04-07 11:37:18,842 - INFO -   Patience: 3/30
+2026-04-07 11:37:18,843 - INFO - 
+Epoch 14/300
+2026-04-07 11:37:20,559 - INFO -   Epoch [10/132] Loss: 0.9779
+2026-04-07 11:37:22,278 - INFO -   Epoch [20/132] Loss: 1.0123
+2026-04-07 11:37:24,002 - INFO -   Epoch [30/132] Loss: 1.3309
+2026-04-07 11:37:25,751 - INFO -   Epoch [40/132] Loss: 0.9372
+2026-04-07 11:37:27,488 - INFO -   Epoch [50/132] Loss: 0.9595
+2026-04-07 11:37:29,227 - INFO -   Epoch [60/132] Loss: 1.1339
+2026-04-07 11:37:30,992 - INFO -   Epoch [70/132] Loss: 0.5667
+2026-04-07 11:37:32,729 - INFO -   Epoch [80/132] Loss: 0.8888
+2026-04-07 11:37:34,438 - INFO -   Epoch [90/132] Loss: 0.3281
+2026-04-07 11:37:36,178 - INFO -   Epoch [100/132] Loss: 0.7669
+2026-04-07 11:37:37,915 - INFO -   Epoch [110/132] Loss: 1.3246
+2026-04-07 11:37:39,650 - INFO -   Epoch [120/132] Loss: 0.8818
+2026-04-07 11:37:41,381 - INFO -   Epoch [130/132] Loss: 0.9882
+2026-04-07 11:37:42,766 - INFO -   Train Loss: 0.8021
+2026-04-07 11:37:42,766 - INFO -   Train Accuracy: 67.68%
+2026-04-07 11:37:42,766 - INFO -   Val Loss: 0.6852
+2026-04-07 11:37:42,766 - INFO -   Val Accuracy: 73.78% | F1: 0.7302
+2026-04-07 11:37:42,766 - INFO -   LR: 0.000100
+2026-04-07 11:37:42,766 - INFO -   Patience: 4/30
+2026-04-07 11:37:42,767 - INFO - 
+Epoch 15/300
+2026-04-07 11:37:44,528 - INFO -   Epoch [10/132] Loss: 0.8633
+2026-04-07 11:37:46,262 - INFO -   Epoch [20/132] Loss: 0.6438
+2026-04-07 11:37:47,992 - INFO -   Epoch [30/132] Loss: 0.8507
+2026-04-07 11:37:49,859 - INFO -   Epoch [40/132] Loss: 0.9430
+2026-04-07 11:37:51,619 - INFO -   Epoch [50/132] Loss: 1.0221
+2026-04-07 11:37:53,357 - INFO -   Epoch [60/132] Loss: 1.6568
+2026-04-07 11:37:55,091 - INFO -   Epoch [70/132] Loss: 0.6261
+2026-04-07 11:37:56,810 - INFO -   Epoch [80/132] Loss: 0.9951
+2026-04-07 11:37:58,569 - INFO -   Epoch [90/132] Loss: 0.4417
+2026-04-07 11:38:00,307 - INFO -   Epoch [100/132] Loss: 0.7421
+2026-04-07 11:38:02,032 - INFO -   Epoch [110/132] Loss: 1.1090
+2026-04-07 11:38:03,750 - INFO -   Epoch [120/132] Loss: 0.8867
+2026-04-07 11:38:05,503 - INFO -   Epoch [130/132] Loss: 0.7370
+2026-04-07 11:38:06,940 - INFO -   Train Loss: 0.7818
+2026-04-07 11:38:06,940 - INFO -   Train Accuracy: 69.46%
+2026-04-07 11:38:06,940 - INFO -   Val Loss: 0.6496
+2026-04-07 11:38:06,940 - INFO -   Val Accuracy: 72.89% | F1: 0.7316
+2026-04-07 11:38:06,940 - INFO -   LR: 0.000100
+2026-04-07 11:38:06,940 - INFO -   Patience: 5/30
+2026-04-07 11:38:06,941 - INFO - 
+Epoch 16/300
+2026-04-07 11:38:08,679 - INFO -   Epoch [10/132] Loss: 0.8540
+2026-04-07 11:38:10,420 - INFO -   Epoch [20/132] Loss: 1.1344
+2026-04-07 11:38:12,150 - INFO -   Epoch [30/132] Loss: 0.3671
+2026-04-07 11:38:13,875 - INFO -   Epoch [40/132] Loss: 0.8378
+2026-04-07 11:38:15,580 - INFO -   Epoch [50/132] Loss: 0.5264
+2026-04-07 11:38:17,304 - INFO -   Epoch [60/132] Loss: 0.4524
+2026-04-07 11:38:19,048 - INFO -   Epoch [70/132] Loss: 0.3396
+2026-04-07 11:38:20,817 - INFO -   Epoch [80/132] Loss: 1.0100
+2026-04-07 11:38:22,565 - INFO -   Epoch [90/132] Loss: 0.5351
+2026-04-07 11:38:24,321 - INFO -   Epoch [100/132] Loss: 0.9178
+2026-04-07 11:38:26,085 - INFO -   Epoch [110/132] Loss: 0.5804
+2026-04-07 11:38:27,830 - INFO -   Epoch [120/132] Loss: 0.6810
+2026-04-07 11:38:29,547 - INFO -   Epoch [130/132] Loss: 0.9578
+2026-04-07 11:38:30,908 - INFO -   Train Loss: 0.7672
+2026-04-07 11:38:30,908 - INFO -   Train Accuracy: 69.08%
+2026-04-07 11:38:30,908 - INFO -   Val Loss: 0.6413
+2026-04-07 11:38:30,908 - INFO -   Val Accuracy: 74.22% | F1: 0.7370
+2026-04-07 11:38:30,908 - INFO -   LR: 0.000100
+2026-04-07 11:38:30,908 - INFO -   Patience: 6/30
+2026-04-07 11:38:30,908 - INFO - 
+Epoch 17/300
+2026-04-07 11:38:32,631 - INFO -   Epoch [10/132] Loss: 1.0249
+2026-04-07 11:38:34,366 - INFO -   Epoch [20/132] Loss: 0.4026
+2026-04-07 11:38:36,096 - INFO -   Epoch [30/132] Loss: 0.6701
+2026-04-07 11:38:37,828 - INFO -   Epoch [40/132] Loss: 0.5422
+2026-04-07 11:38:39,611 - INFO -   Epoch [50/132] Loss: 0.9058
+2026-04-07 11:38:41,361 - INFO -   Epoch [60/132] Loss: 0.9648
+2026-04-07 11:38:43,093 - INFO -   Epoch [70/132] Loss: 0.5052
+2026-04-07 11:38:44,833 - INFO -   Epoch [80/132] Loss: 0.6488
+2026-04-07 11:38:46,576 - INFO -   Epoch [90/132] Loss: 0.6453
+2026-04-07 11:38:48,334 - INFO -   Epoch [100/132] Loss: 0.5765
+2026-04-07 11:38:50,061 - INFO -   Epoch [110/132] Loss: 0.8592
+2026-04-07 11:38:51,798 - INFO -   Epoch [120/132] Loss: 0.3721
+2026-04-07 11:38:53,523 - INFO -   Epoch [130/132] Loss: 0.4686
+2026-04-07 11:38:54,889 - INFO -   Train Loss: 0.7318
+2026-04-07 11:38:54,889 - INFO -   Train Accuracy: 70.86%
+2026-04-07 11:38:54,889 - INFO -   Val Loss: 0.6227
+2026-04-07 11:38:54,889 - INFO -   Val Accuracy: 75.56% | F1: 0.7557
+2026-04-07 11:38:54,889 - INFO -   LR: 0.000050
+2026-04-07 11:38:55,354 - INFO -   ✓ New best model saved! (Acc: 75.56%)
+2026-04-07 11:38:55,354 - INFO -   Patience: 0/30
+2026-04-07 11:38:55,354 - INFO - 
+Epoch 18/300
+2026-04-07 11:38:57,167 - INFO -   Epoch [10/132] Loss: 0.4097
+2026-04-07 11:38:58,910 - INFO -   Epoch [20/132] Loss: 0.7233
+2026-04-07 11:39:00,651 - INFO -   Epoch [30/132] Loss: 0.5638
+2026-04-07 11:39:02,379 - INFO -   Epoch [40/132] Loss: 0.5327
+2026-04-07 11:39:04,107 - INFO -   Epoch [50/132] Loss: 0.9812
+2026-04-07 11:39:05,868 - INFO -   Epoch [60/132] Loss: 0.5004
+2026-04-07 11:39:07,668 - INFO -   Epoch [70/132] Loss: 0.3289
+2026-04-07 11:39:09,569 - INFO -   Epoch [80/132] Loss: 1.0862
+2026-04-07 11:39:11,492 - INFO -   Epoch [90/132] Loss: 1.5598
+2026-04-07 11:39:13,279 - INFO -   Epoch [100/132] Loss: 1.2412
+2026-04-07 11:39:15,006 - INFO -   Epoch [110/132] Loss: 0.2454
+2026-04-07 11:39:16,757 - INFO -   Epoch [120/132] Loss: 0.9822
+2026-04-07 11:39:18,499 - INFO -   Epoch [130/132] Loss: 0.5658
+2026-04-07 11:39:19,859 - INFO -   Train Loss: 0.7293
+2026-04-07 11:39:19,859 - INFO -   Train Accuracy: 70.29%
+2026-04-07 11:39:19,859 - INFO -   Val Loss: 0.6296
+2026-04-07 11:39:19,859 - INFO -   Val Accuracy: 72.00% | F1: 0.7215
+2026-04-07 11:39:19,859 - INFO -   LR: 0.000050
+2026-04-07 11:39:19,859 - INFO -   Patience: 1/30
+2026-04-07 11:39:19,859 - INFO - 
+Epoch 19/300
+2026-04-07 11:39:21,619 - INFO -   Epoch [10/132] Loss: 0.5143
+2026-04-07 11:39:23,450 - INFO -   Epoch [20/132] Loss: 0.4642
+2026-04-07 11:39:25,202 - INFO -   Epoch [30/132] Loss: 0.4003
+2026-04-07 11:39:27,029 - INFO -   Epoch [40/132] Loss: 0.8027
+2026-04-07 11:39:28,904 - INFO -   Epoch [50/132] Loss: 0.7720
+2026-04-07 11:39:30,784 - INFO -   Epoch [60/132] Loss: 0.8962
+2026-04-07 11:39:32,882 - INFO -   Epoch [70/132] Loss: 1.1586
+2026-04-07 11:39:34,653 - INFO -   Epoch [80/132] Loss: 1.2218
+2026-04-07 11:39:36,518 - INFO -   Epoch [90/132] Loss: 1.0630
+2026-04-07 11:39:38,269 - INFO -   Epoch [100/132] Loss: 0.8668
+2026-04-07 11:39:40,018 - INFO -   Epoch [110/132] Loss: 0.6655
+2026-04-07 11:39:41,853 - INFO -   Epoch [120/132] Loss: 0.6603
+2026-04-07 11:39:43,607 - INFO -   Epoch [130/132] Loss: 0.7934
+2026-04-07 11:39:45,023 - INFO -   Train Loss: 0.7372
+2026-04-07 11:39:45,023 - INFO -   Train Accuracy: 70.86%
+2026-04-07 11:39:45,023 - INFO -   Val Loss: 0.6282
+2026-04-07 11:39:45,023 - INFO -   Val Accuracy: 75.11% | F1: 0.7489
+2026-04-07 11:39:45,023 - INFO -   LR: 0.000050
+2026-04-07 11:39:45,023 - INFO -   Patience: 2/30
+2026-04-07 11:39:45,023 - INFO - 
+Epoch 20/300
+2026-04-07 11:39:46,785 - INFO -   Epoch [10/132] Loss: 0.7481
+2026-04-07 11:39:48,550 - INFO -   Epoch [20/132] Loss: 1.0374
+2026-04-07 11:39:50,296 - INFO -   Epoch [30/132] Loss: 0.7753
+2026-04-07 11:39:52,125 - INFO -   Epoch [40/132] Loss: 1.0125
+2026-04-07 11:39:53,864 - INFO -   Epoch [50/132] Loss: 0.9244
+2026-04-07 11:39:55,611 - INFO -   Epoch [60/132] Loss: 0.7673
+2026-04-07 11:39:57,364 - INFO -   Epoch [70/132] Loss: 0.4955
+2026-04-07 11:39:59,123 - INFO -   Epoch [80/132] Loss: 0.6386
+2026-04-07 11:40:00,885 - INFO -   Epoch [90/132] Loss: 0.6666
+2026-04-07 11:40:02,721 - INFO -   Epoch [100/132] Loss: 0.7038
+2026-04-07 11:40:04,479 - INFO -   Epoch [110/132] Loss: 0.8767
+2026-04-07 11:40:06,237 - INFO -   Epoch [120/132] Loss: 0.6017
+2026-04-07 11:40:07,985 - INFO -   Epoch [130/132] Loss: 0.5565
+2026-04-07 11:40:09,446 - INFO -   Train Loss: 0.7245
+2026-04-07 11:40:09,446 - INFO -   Train Accuracy: 71.24%
+2026-04-07 11:40:09,446 - INFO -   Val Loss: 0.6146
+2026-04-07 11:40:09,446 - INFO -   Val Accuracy: 72.89% | F1: 0.7265
+2026-04-07 11:40:09,446 - INFO -   LR: 0.000050
+2026-04-07 11:40:09,447 - INFO -   Patience: 3/30
+2026-04-07 11:40:09,447 - INFO - 
+Epoch 21/300
+2026-04-07 11:40:11,222 - INFO -   Epoch [10/132] Loss: 0.8314
+2026-04-07 11:40:13,010 - INFO -   Epoch [20/132] Loss: 0.7388
+2026-04-07 11:40:14,744 - INFO -   Epoch [30/132] Loss: 0.4878
+2026-04-07 11:40:16,482 - INFO -   Epoch [40/132] Loss: 0.9139
+2026-04-07 11:40:18,228 - INFO -   Epoch [50/132] Loss: 0.3542
+2026-04-07 11:40:19,996 - INFO -   Epoch [60/132] Loss: 0.3761
+2026-04-07 11:40:21,757 - INFO -   Epoch [70/132] Loss: 0.5899
+2026-04-07 11:40:23,500 - INFO -   Epoch [80/132] Loss: 0.6126
+2026-04-07 11:40:25,258 - INFO -   Epoch [90/132] Loss: 0.8399
+2026-04-07 11:40:27,078 - INFO -   Epoch [100/132] Loss: 0.6152
+2026-04-07 11:40:28,832 - INFO -   Epoch [110/132] Loss: 0.3922
+2026-04-07 11:40:30,588 - INFO -   Epoch [120/132] Loss: 0.8670
+2026-04-07 11:40:32,323 - INFO -   Epoch [130/132] Loss: 0.9204
+2026-04-07 11:40:33,736 - INFO -   Train Loss: 0.7114
+2026-04-07 11:40:33,737 - INFO -   Train Accuracy: 71.49%
+2026-04-07 11:40:33,737 - INFO -   Val Loss: 0.6228
+2026-04-07 11:40:33,737 - INFO -   Val Accuracy: 72.44% | F1: 0.7251
+2026-04-07 11:40:33,737 - INFO -   LR: 0.000050
+2026-04-07 11:40:33,737 - INFO -   Patience: 4/30
+2026-04-07 11:40:33,737 - INFO - 
+Epoch 22/300
+2026-04-07 11:40:35,468 - INFO -   Epoch [10/132] Loss: 0.7046
+2026-04-07 11:40:37,202 - INFO -   Epoch [20/132] Loss: 0.8660
+2026-04-07 11:40:38,943 - INFO -   Epoch [30/132] Loss: 0.7819
+2026-04-07 11:40:40,696 - INFO -   Epoch [40/132] Loss: 0.7026
+2026-04-07 11:40:42,444 - INFO -   Epoch [50/132] Loss: 0.7723
+2026-04-07 11:40:44,199 - INFO -   Epoch [60/132] Loss: 0.5478
+2026-04-07 11:40:45,953 - INFO -   Epoch [70/132] Loss: 0.6332
+2026-04-07 11:40:47,700 - INFO -   Epoch [80/132] Loss: 0.8121
+2026-04-07 11:40:49,447 - INFO -   Epoch [90/132] Loss: 0.8617
+2026-04-07 11:40:51,213 - INFO -   Epoch [100/132] Loss: 0.9793
+2026-04-07 11:40:52,969 - INFO -   Epoch [110/132] Loss: 0.7295
+2026-04-07 11:40:54,716 - INFO -   Epoch [120/132] Loss: 0.8346
+2026-04-07 11:40:56,476 - INFO -   Epoch [130/132] Loss: 0.7614
+2026-04-07 11:40:57,896 - INFO -   Train Loss: 0.7126
+2026-04-07 11:40:57,896 - INFO -   Train Accuracy: 70.29%
+2026-04-07 11:40:57,896 - INFO -   Val Loss: 0.6182
+2026-04-07 11:40:57,897 - INFO -   Val Accuracy: 72.00% | F1: 0.7156
+2026-04-07 11:40:57,897 - INFO -   LR: 0.000050
+2026-04-07 11:40:57,897 - INFO -   Patience: 5/30
+2026-04-07 11:40:57,897 - INFO - 
+Epoch 23/300
+2026-04-07 11:40:59,635 - INFO -   Epoch [10/132] Loss: 0.9992
+2026-04-07 11:41:01,369 - INFO -   Epoch [20/132] Loss: 0.7340
+2026-04-07 11:41:03,102 - INFO -   Epoch [30/132] Loss: 0.5656
+2026-04-07 11:41:04,848 - INFO -   Epoch [40/132] Loss: 0.5584
+2026-04-07 11:41:06,583 - INFO -   Epoch [50/132] Loss: 0.8883
+2026-04-07 11:41:08,315 - INFO -   Epoch [60/132] Loss: 0.4360
+2026-04-07 11:41:10,048 - INFO -   Epoch [70/132] Loss: 0.7270
+2026-04-07 11:41:11,793 - INFO -   Epoch [80/132] Loss: 0.4468
+2026-04-07 11:41:13,544 - INFO -   Epoch [90/132] Loss: 0.7249
+2026-04-07 11:41:15,298 - INFO -   Epoch [100/132] Loss: 0.6724
+2026-04-07 11:41:17,047 - INFO -   Epoch [110/132] Loss: 0.9071
+2026-04-07 11:41:18,784 - INFO -   Epoch [120/132] Loss: 0.4189
+2026-04-07 11:41:20,528 - INFO -   Epoch [130/132] Loss: 0.3536
+2026-04-07 11:41:21,981 - INFO -   Train Loss: 0.7187
+2026-04-07 11:41:21,981 - INFO -   Train Accuracy: 71.05%
+2026-04-07 11:41:21,981 - INFO -   Val Loss: 0.6227
+2026-04-07 11:41:21,981 - INFO -   Val Accuracy: 72.89% | F1: 0.7258
+2026-04-07 11:41:21,981 - INFO -   LR: 0.000050
+2026-04-07 11:41:21,981 - INFO -   Patience: 6/30
+2026-04-07 11:41:21,981 - INFO - 
+Epoch 24/300
+2026-04-07 11:41:23,739 - INFO -   Epoch [10/132] Loss: 0.6283
+2026-04-07 11:41:25,496 - INFO -   Epoch [20/132] Loss: 0.6814
+2026-04-07 11:41:27,240 - INFO -   Epoch [30/132] Loss: 0.3814
+2026-04-07 11:41:29,000 - INFO -   Epoch [40/132] Loss: 0.5206
+2026-04-07 11:41:30,767 - INFO -   Epoch [50/132] Loss: 0.4048
+2026-04-07 11:41:32,594 - INFO -   Epoch [60/132] Loss: 0.5559
+2026-04-07 11:41:34,344 - INFO -   Epoch [70/132] Loss: 0.5951
+2026-04-07 11:41:36,084 - INFO -   Epoch [80/132] Loss: 1.1615
+2026-04-07 11:41:37,837 - INFO -   Epoch [90/132] Loss: 0.4236
+2026-04-07 11:41:39,562 - INFO -   Epoch [100/132] Loss: 0.3781
+2026-04-07 11:41:41,288 - INFO -   Epoch [110/132] Loss: 0.5930
+2026-04-07 11:41:43,038 - INFO -   Epoch [120/132] Loss: 0.6980
+2026-04-07 11:41:44,796 - INFO -   Epoch [130/132] Loss: 0.6991
+2026-04-07 11:41:46,226 - INFO -   Train Loss: 0.6955
+2026-04-07 11:41:46,226 - INFO -   Train Accuracy: 72.13%
+2026-04-07 11:41:46,226 - INFO -   Val Loss: 0.5947
+2026-04-07 11:41:46,226 - INFO -   Val Accuracy: 75.11% | F1: 0.7487
+2026-04-07 11:41:46,226 - INFO -   LR: 0.000025
+2026-04-07 11:41:46,226 - INFO -   Patience: 7/30
+2026-04-07 11:41:46,226 - INFO - 
+Epoch 25/300
+2026-04-07 11:41:47,961 - INFO -   Epoch [10/132] Loss: 0.6396
+2026-04-07 11:41:49,685 - INFO -   Epoch [20/132] Loss: 0.9823
+2026-04-07 11:41:51,437 - INFO -   Epoch [30/132] Loss: 0.7595
+2026-04-07 11:41:53,177 - INFO -   Epoch [40/132] Loss: 0.6835
+2026-04-07 11:41:54,911 - INFO -   Epoch [50/132] Loss: 0.5389
+2026-04-07 11:41:56,638 - INFO -   Epoch [60/132] Loss: 0.6086
+2026-04-07 11:41:58,381 - INFO -   Epoch [70/132] Loss: 0.5211
+2026-04-07 11:42:00,151 - INFO -   Epoch [80/132] Loss: 0.4955
+2026-04-07 11:42:01,891 - INFO -   Epoch [90/132] Loss: 0.7280
+2026-04-07 11:42:03,633 - INFO -   Epoch [100/132] Loss: 0.9538
+2026-04-07 11:42:05,376 - INFO -   Epoch [110/132] Loss: 0.8202
+2026-04-07 11:42:07,113 - INFO -   Epoch [120/132] Loss: 0.9510
+2026-04-07 11:42:08,847 - INFO -   Epoch [130/132] Loss: 1.0517
+2026-04-07 11:42:10,235 - INFO -   Train Loss: 0.6775
+2026-04-07 11:42:10,235 - INFO -   Train Accuracy: 73.40%
+2026-04-07 11:42:10,235 - INFO -   Val Loss: 0.5823
+2026-04-07 11:42:10,236 - INFO -   Val Accuracy: 74.67% | F1: 0.7452
+2026-04-07 11:42:10,236 - INFO -   LR: 0.000025
+2026-04-07 11:42:10,236 - INFO -   Patience: 8/30
+2026-04-07 11:42:10,236 - INFO - 
+Epoch 26/300
+2026-04-07 11:42:11,970 - INFO -   Epoch [10/132] Loss: 0.6469
+2026-04-07 11:42:13,714 - INFO -   Epoch [20/132] Loss: 0.4669
+2026-04-07 11:42:15,455 - INFO -   Epoch [30/132] Loss: 0.8270
+2026-04-07 11:42:17,211 - INFO -   Epoch [40/132] Loss: 0.6136
+2026-04-07 11:42:18,954 - INFO -   Epoch [50/132] Loss: 0.7816
+2026-04-07 11:42:20,731 - INFO -   Epoch [60/132] Loss: 1.0069
+2026-04-07 11:42:22,512 - INFO -   Epoch [70/132] Loss: 0.4564
+2026-04-07 11:42:24,271 - INFO -   Epoch [80/132] Loss: 0.4339
+2026-04-07 11:42:26,030 - INFO -   Epoch [90/132] Loss: 0.6549
+2026-04-07 11:42:27,757 - INFO -   Epoch [100/132] Loss: 0.8702
+2026-04-07 11:42:29,501 - INFO -   Epoch [110/132] Loss: 0.3174
+2026-04-07 11:42:31,246 - INFO -   Epoch [120/132] Loss: 0.5945
+2026-04-07 11:42:32,989 - INFO -   Epoch [130/132] Loss: 0.7770
+2026-04-07 11:42:34,380 - INFO -   Train Loss: 0.6552
+2026-04-07 11:42:34,380 - INFO -   Train Accuracy: 73.84%
+2026-04-07 11:42:34,380 - INFO -   Val Loss: 0.5789
+2026-04-07 11:42:34,380 - INFO -   Val Accuracy: 74.67% | F1: 0.7450
+2026-04-07 11:42:34,380 - INFO -   LR: 0.000025
+2026-04-07 11:42:34,380 - INFO -   Patience: 9/30
+2026-04-07 11:42:34,380 - INFO - 
+Epoch 27/300
+2026-04-07 11:42:36,108 - INFO -   Epoch [10/132] Loss: 0.4662
+2026-04-07 11:42:37,830 - INFO -   Epoch [20/132] Loss: 0.5697
+2026-04-07 11:42:39,579 - INFO -   Epoch [30/132] Loss: 0.2454
+2026-04-07 11:42:41,321 - INFO -   Epoch [40/132] Loss: 0.9363
+2026-04-07 11:42:43,056 - INFO -   Epoch [50/132] Loss: 0.8650
+2026-04-07 11:42:44,790 - INFO -   Epoch [60/132] Loss: 0.5681
+2026-04-07 11:42:46,511 - INFO -   Epoch [70/132] Loss: 0.3943
+2026-04-07 11:42:48,253 - INFO -   Epoch [80/132] Loss: 0.9779
+2026-04-07 11:42:49,997 - INFO -   Epoch [90/132] Loss: 0.6829
+2026-04-07 11:42:51,746 - INFO -   Epoch [100/132] Loss: 0.5633
+2026-04-07 11:42:53,473 - INFO -   Epoch [110/132] Loss: 0.8143
+2026-04-07 11:42:55,193 - INFO -   Epoch [120/132] Loss: 0.6051
+2026-04-07 11:42:56,945 - INFO -   Epoch [130/132] Loss: 1.2495
+2026-04-07 11:42:58,421 - INFO -   Train Loss: 0.6763
+2026-04-07 11:42:58,421 - INFO -   Train Accuracy: 73.59%
+2026-04-07 11:42:58,421 - INFO -   Val Loss: 0.5683
+2026-04-07 11:42:58,421 - INFO -   Val Accuracy: 77.78% | F1: 0.7756
+2026-04-07 11:42:58,421 - INFO -   LR: 0.000025
+2026-04-07 11:42:59,583 - INFO -   ✓ New best model saved! (Acc: 77.78%)
+2026-04-07 11:42:59,584 - INFO -   Patience: 0/30
+2026-04-07 11:42:59,584 - INFO - 
+Epoch 28/300
+2026-04-07 11:43:01,314 - INFO -   Epoch [10/132] Loss: 0.4634
+2026-04-07 11:43:03,058 - INFO -   Epoch [20/132] Loss: 1.1965
+2026-04-07 11:43:04,811 - INFO -   Epoch [30/132] Loss: 0.5353
+2026-04-07 11:43:06,553 - INFO -   Epoch [40/132] Loss: 0.9418
+2026-04-07 11:43:08,288 - INFO -   Epoch [50/132] Loss: 0.4618
+2026-04-07 11:43:10,008 - INFO -   Epoch [60/132] Loss: 0.3655
+2026-04-07 11:43:11,777 - INFO -   Epoch [70/132] Loss: 0.6173
+2026-04-07 11:43:13,533 - INFO -   Epoch [80/132] Loss: 0.5994
+2026-04-07 11:43:15,283 - INFO -   Epoch [90/132] Loss: 0.5667
+2026-04-07 11:43:17,023 - INFO -   Epoch [100/132] Loss: 1.0051
+2026-04-07 11:43:18,744 - INFO -   Epoch [110/132] Loss: 0.6033
+2026-04-07 11:43:20,510 - INFO -   Epoch [120/132] Loss: 0.4262
+2026-04-07 11:43:22,256 - INFO -   Epoch [130/132] Loss: 0.6178
+2026-04-07 11:43:23,646 - INFO -   Train Loss: 0.6722
+2026-04-07 11:43:23,646 - INFO -   Train Accuracy: 73.78%
+2026-04-07 11:43:23,646 - INFO -   Val Loss: 0.5756
+2026-04-07 11:43:23,646 - INFO -   Val Accuracy: 75.56% | F1: 0.7530
+2026-04-07 11:43:23,647 - INFO -   LR: 0.000025
+2026-04-07 11:43:23,647 - INFO -   Patience: 1/30
+2026-04-07 11:43:23,647 - INFO - 
+Epoch 29/300
+2026-04-07 11:43:25,384 - INFO -   Epoch [10/132] Loss: 0.6360
+2026-04-07 11:43:27,138 - INFO -   Epoch [20/132] Loss: 0.5748
+2026-04-07 11:43:28,872 - INFO -   Epoch [30/132] Loss: 0.9624
+2026-04-07 11:43:30,602 - INFO -   Epoch [40/132] Loss: 0.4852
+2026-04-07 11:43:32,337 - INFO -   Epoch [50/132] Loss: 0.6336
+2026-04-07 11:43:34,093 - INFO -   Epoch [60/132] Loss: 0.3545
+2026-04-07 11:43:35,826 - INFO -   Epoch [70/132] Loss: 0.3458
+2026-04-07 11:43:37,569 - INFO -   Epoch [80/132] Loss: 0.5772
+2026-04-07 11:43:39,320 - INFO -   Epoch [90/132] Loss: 0.7168
+2026-04-07 11:43:41,059 - INFO -   Epoch [100/132] Loss: 0.3914
+2026-04-07 11:43:42,807 - INFO -   Epoch [110/132] Loss: 0.4363
+2026-04-07 11:43:44,560 - INFO -   Epoch [120/132] Loss: 0.8250
+2026-04-07 11:43:46,290 - INFO -   Epoch [130/132] Loss: 0.6122
+2026-04-07 11:43:47,666 - INFO -   Train Loss: 0.6626
+2026-04-07 11:43:47,666 - INFO -   Train Accuracy: 74.35%
+2026-04-07 11:43:47,666 - INFO -   Val Loss: 0.5799
+2026-04-07 11:43:47,666 - INFO -   Val Accuracy: 75.11% | F1: 0.7486
+2026-04-07 11:43:47,666 - INFO -   LR: 0.000025
+2026-04-07 11:43:47,666 - INFO -   Patience: 2/30
+2026-04-07 11:43:47,666 - INFO - 
+Epoch 30/300
+2026-04-07 11:43:49,527 - INFO -   Epoch [10/132] Loss: 0.6857
+2026-04-07 11:43:51,205 - INFO -   Epoch [20/132] Loss: 1.0242
+2026-04-07 11:43:52,895 - INFO -   Epoch [30/132] Loss: 0.8339
+2026-04-07 11:43:54,592 - INFO -   Epoch [40/132] Loss: 0.5934
+2026-04-07 11:43:56,248 - INFO -   Epoch [50/132] Loss: 0.9150
+2026-04-07 11:43:57,916 - INFO -   Epoch [60/132] Loss: 0.7602
+2026-04-07 11:43:59,585 - INFO -   Epoch [70/132] Loss: 0.6623
+2026-04-07 11:44:01,265 - INFO -   Epoch [80/132] Loss: 0.6624
+2026-04-07 11:44:02,939 - INFO -   Epoch [90/132] Loss: 0.3843
+2026-04-07 11:44:04,628 - INFO -   Epoch [100/132] Loss: 0.9528
+2026-04-07 11:44:06,301 - INFO -   Epoch [110/132] Loss: 0.9723
+2026-04-07 11:44:07,972 - INFO -   Epoch [120/132] Loss: 0.5216
+2026-04-07 11:44:09,628 - INFO -   Epoch [130/132] Loss: 0.7045
+2026-04-07 11:44:10,872 - INFO -   Train Loss: 0.6584
+2026-04-07 11:44:10,873 - INFO -   Train Accuracy: 74.22%
+2026-04-07 11:44:10,873 - INFO -   Val Loss: 0.5782
+2026-04-07 11:44:10,873 - INFO -   Val Accuracy: 75.11% | F1: 0.7486
+2026-04-07 11:44:10,873 - INFO -   LR: 0.000025
+2026-04-07 11:44:10,873 - INFO -   Patience: 3/30
+2026-04-07 11:44:10,873 - INFO - 
+Epoch 31/300
+2026-04-07 11:44:12,524 - INFO -   Epoch [10/132] Loss: 0.6280
+2026-04-07 11:44:14,197 - INFO -   Epoch [20/132] Loss: 1.0476
+2026-04-07 11:44:15,886 - INFO -   Epoch [30/132] Loss: 0.6370
+2026-04-07 11:44:17,572 - INFO -   Epoch [40/132] Loss: 0.6801
+2026-04-07 11:44:19,248 - INFO -   Epoch [50/132] Loss: 0.9570
+2026-04-07 11:44:20,917 - INFO -   Epoch [60/132] Loss: 0.5538
+2026-04-07 11:44:22,565 - INFO -   Epoch [70/132] Loss: 0.8968
+2026-04-07 11:44:24,279 - INFO -   Epoch [80/132] Loss: 0.6169
+2026-04-07 11:44:25,944 - INFO -   Epoch [90/132] Loss: 0.3365
+2026-04-07 11:44:27,615 - INFO -   Epoch [100/132] Loss: 0.3488
+2026-04-07 11:44:29,320 - INFO -   Epoch [110/132] Loss: 0.6209
+2026-04-07 11:44:30,971 - INFO -   Epoch [120/132] Loss: 0.3488
+2026-04-07 11:44:32,642 - INFO -   Epoch [130/132] Loss: 0.7413
+2026-04-07 11:44:33,907 - INFO -   Train Loss: 0.6751
+2026-04-07 11:44:33,907 - INFO -   Train Accuracy: 74.35%
+2026-04-07 11:44:33,908 - INFO -   Val Loss: 0.5773
+2026-04-07 11:44:33,908 - INFO -   Val Accuracy: 75.56% | F1: 0.7514
+2026-04-07 11:44:33,908 - INFO -   LR: 0.000025
+2026-04-07 11:44:33,908 - INFO -   Patience: 4/30
+2026-04-07 11:44:33,908 - INFO - 
+Epoch 32/300
+2026-04-07 11:44:35,591 - INFO -   Epoch [10/132] Loss: 0.5104
+2026-04-07 11:44:37,249 - INFO -   Epoch [20/132] Loss: 1.0525
+2026-04-07 11:44:38,911 - INFO -   Epoch [30/132] Loss: 0.7391
+2026-04-07 11:44:40,598 - INFO -   Epoch [40/132] Loss: 0.5349
+2026-04-07 11:44:42,277 - INFO -   Epoch [50/132] Loss: 0.6951
+2026-04-07 11:44:43,940 - INFO -   Epoch [60/132] Loss: 0.5786
+2026-04-07 11:44:45,620 - INFO -   Epoch [70/132] Loss: 0.7764
+2026-04-07 11:44:47,296 - INFO -   Epoch [80/132] Loss: 0.8117
+2026-04-07 11:44:48,981 - INFO -   Epoch [90/132] Loss: 0.7200
+2026-04-07 11:44:50,642 - INFO -   Epoch [100/132] Loss: 0.2438
+2026-04-07 11:44:52,325 - INFO -   Epoch [110/132] Loss: 0.4397
+2026-04-07 11:44:54,000 - INFO -   Epoch [120/132] Loss: 0.4778
+2026-04-07 11:44:55,649 - INFO -   Epoch [130/132] Loss: 1.0280
+2026-04-07 11:44:56,903 - INFO -   Train Loss: 0.6624
+2026-04-07 11:44:56,903 - INFO -   Train Accuracy: 74.10%
+2026-04-07 11:44:56,903 - INFO -   Val Loss: 0.5640
+2026-04-07 11:44:56,903 - INFO -   Val Accuracy: 75.56% | F1: 0.7532
+2026-04-07 11:44:56,903 - INFO -   LR: 0.000025
+2026-04-07 11:44:56,903 - INFO -   Patience: 5/30
+2026-04-07 11:44:56,903 - INFO - 
+Epoch 33/300
+2026-04-07 11:44:58,575 - INFO -   Epoch [10/132] Loss: 1.2613
+2026-04-07 11:45:00,234 - INFO -   Epoch [20/132] Loss: 0.6305
+2026-04-07 11:45:01,890 - INFO -   Epoch [30/132] Loss: 0.3031
+2026-04-07 11:45:03,585 - INFO -   Epoch [40/132] Loss: 0.2941
+2026-04-07 11:45:05,271 - INFO -   Epoch [50/132] Loss: 0.7179
+2026-04-07 11:45:06,953 - INFO -   Epoch [60/132] Loss: 0.5133
+2026-04-07 11:45:08,633 - INFO -   Epoch [70/132] Loss: 0.3342
+2026-04-07 11:45:10,303 - INFO -   Epoch [80/132] Loss: 1.1092
+2026-04-07 11:45:11,963 - INFO -   Epoch [90/132] Loss: 0.3903
+2026-04-07 11:45:13,628 - INFO -   Epoch [100/132] Loss: 0.4592
+2026-04-07 11:45:15,334 - INFO -   Epoch [110/132] Loss: 0.2932
+2026-04-07 11:45:17,152 - INFO -   Epoch [120/132] Loss: 0.5084
+2026-04-07 11:45:18,968 - INFO -   Epoch [130/132] Loss: 0.7980
+2026-04-07 11:45:20,404 - INFO -   Train Loss: 0.6325
+2026-04-07 11:45:20,404 - INFO -   Train Accuracy: 74.60%
+2026-04-07 11:45:20,404 - INFO -   Val Loss: 0.5688
+2026-04-07 11:45:20,404 - INFO -   Val Accuracy: 73.78% | F1: 0.7376
+2026-04-07 11:45:20,404 - INFO -   LR: 0.000025
+2026-04-07 11:45:20,404 - INFO -   Patience: 6/30
+2026-04-07 11:45:20,405 - INFO - 
+Epoch 34/300
+2026-04-07 11:45:22,088 - INFO -   Epoch [10/132] Loss: 0.9048
+2026-04-07 11:45:23,767 - INFO -   Epoch [20/132] Loss: 0.5539
+2026-04-07 11:45:25,585 - INFO -   Epoch [30/132] Loss: 0.3132
+2026-04-07 11:45:27,252 - INFO -   Epoch [40/132] Loss: 0.8413
+2026-04-07 11:45:28,979 - INFO -   Epoch [50/132] Loss: 0.9047
+2026-04-07 11:45:30,674 - INFO -   Epoch [60/132] Loss: 0.5707
+2026-04-07 11:45:32,371 - INFO -   Epoch [70/132] Loss: 0.6723
+2026-04-07 11:45:34,152 - INFO -   Epoch [80/132] Loss: 0.8582
+2026-04-07 11:45:35,859 - INFO -   Epoch [90/132] Loss: 1.0408
+2026-04-07 11:45:37,507 - INFO -   Epoch [100/132] Loss: 0.6297
+2026-04-07 11:45:39,193 - INFO -   Epoch [110/132] Loss: 0.5108
+2026-04-07 11:45:40,883 - INFO -   Epoch [120/132] Loss: 0.4865
+2026-04-07 11:45:42,568 - INFO -   Epoch [130/132] Loss: 1.1493
+2026-04-07 11:45:43,888 - INFO -   Train Loss: 0.6437
+2026-04-07 11:45:43,888 - INFO -   Train Accuracy: 75.43%
+2026-04-07 11:45:43,888 - INFO -   Val Loss: 0.5655
+2026-04-07 11:45:43,888 - INFO -   Val Accuracy: 74.22% | F1: 0.7411
+2026-04-07 11:45:43,889 - INFO -   LR: 0.000013
+2026-04-07 11:45:43,889 - INFO -   Patience: 7/30
+2026-04-07 11:45:43,889 - INFO - 
+Epoch 35/300
+2026-04-07 11:45:45,596 - INFO -   Epoch [10/132] Loss: 0.2717
+2026-04-07 11:45:47,273 - INFO -   Epoch [20/132] Loss: 0.6311
+2026-04-07 11:45:48,943 - INFO -   Epoch [30/132] Loss: 0.6749
+2026-04-07 11:45:50,602 - INFO -   Epoch [40/132] Loss: 0.4907
+2026-04-07 11:45:52,290 - INFO -   Epoch [50/132] Loss: 0.5444
+2026-04-07 11:45:53,984 - INFO -   Epoch [60/132] Loss: 1.3507
+2026-04-07 11:45:55,676 - INFO -   Epoch [70/132] Loss: 0.3688
+2026-04-07 11:45:57,344 - INFO -   Epoch [80/132] Loss: 0.5257
+2026-04-07 11:45:59,003 - INFO -   Epoch [90/132] Loss: 0.9507
+2026-04-07 11:46:00,708 - INFO -   Epoch [100/132] Loss: 0.9518
+2026-04-07 11:46:02,388 - INFO -   Epoch [110/132] Loss: 1.1652
+2026-04-07 11:46:04,082 - INFO -   Epoch [120/132] Loss: 0.6610
+2026-04-07 11:46:05,783 - INFO -   Epoch [130/132] Loss: 0.7585
+2026-04-07 11:46:07,065 - INFO -   Train Loss: 0.6415
+2026-04-07 11:46:07,066 - INFO -   Train Accuracy: 75.75%
+2026-04-07 11:46:07,066 - INFO -   Val Loss: 0.5582
+2026-04-07 11:46:07,066 - INFO -   Val Accuracy: 75.56% | F1: 0.7525
+2026-04-07 11:46:07,066 - INFO -   LR: 0.000013
+2026-04-07 11:46:07,066 - INFO -   Patience: 8/30
+2026-04-07 11:46:07,066 - INFO - 
+Epoch 36/300
+2026-04-07 11:46:08,754 - INFO -   Epoch [10/132] Loss: 0.6789
+2026-04-07 11:46:10,441 - INFO -   Epoch [20/132] Loss: 0.3231
+2026-04-07 11:46:12,140 - INFO -   Epoch [30/132] Loss: 1.0587
+2026-04-07 11:46:13,796 - INFO -   Epoch [40/132] Loss: 0.9106
+2026-04-07 11:46:15,465 - INFO -   Epoch [50/132] Loss: 0.5039
+2026-04-07 11:46:17,137 - INFO -   Epoch [60/132] Loss: 0.5927
+2026-04-07 11:46:18,808 - INFO -   Epoch [70/132] Loss: 0.6446
+2026-04-07 11:46:20,451 - INFO -   Epoch [80/132] Loss: 0.8304
+2026-04-07 11:46:22,159 - INFO -   Epoch [90/132] Loss: 0.3711
+2026-04-07 11:46:23,849 - INFO -   Epoch [100/132] Loss: 0.6358
+2026-04-07 11:46:25,540 - INFO -   Epoch [110/132] Loss: 0.4902
+2026-04-07 11:46:27,203 - INFO -   Epoch [120/132] Loss: 0.3311
+2026-04-07 11:46:28,891 - INFO -   Epoch [130/132] Loss: 0.6013
+2026-04-07 11:46:30,147 - INFO -   Train Loss: 0.6524
+2026-04-07 11:46:30,147 - INFO -   Train Accuracy: 74.16%
+2026-04-07 11:46:30,147 - INFO -   Val Loss: 0.5616
+2026-04-07 11:46:30,147 - INFO -   Val Accuracy: 74.22% | F1: 0.7405
+2026-04-07 11:46:30,148 - INFO -   LR: 0.000013
+2026-04-07 11:46:30,148 - INFO -   Patience: 9/30
+2026-04-07 11:46:30,148 - INFO - 
+Epoch 37/300
+2026-04-07 11:46:31,807 - INFO -   Epoch [10/132] Loss: 0.3758
+2026-04-07 11:46:33,475 - INFO -   Epoch [20/132] Loss: 0.3135
+2026-04-07 11:46:35,152 - INFO -   Epoch [30/132] Loss: 0.6242
+2026-04-07 11:46:36,820 - INFO -   Epoch [40/132] Loss: 0.6931
+2026-04-07 11:46:38,494 - INFO -   Epoch [50/132] Loss: 0.4178
+2026-04-07 11:46:40,168 - INFO -   Epoch [60/132] Loss: 0.6377
+2026-04-07 11:46:41,847 - INFO -   Epoch [70/132] Loss: 0.5976
+2026-04-07 11:46:43,494 - INFO -   Epoch [80/132] Loss: 0.4560
+2026-04-07 11:46:45,207 - INFO -   Epoch [90/132] Loss: 0.9824
+2026-04-07 11:46:46,888 - INFO -   Epoch [100/132] Loss: 0.6684
+2026-04-07 11:46:48,572 - INFO -   Epoch [110/132] Loss: 0.4559
+2026-04-07 11:46:50,249 - INFO -   Epoch [120/132] Loss: 0.9638
+2026-04-07 11:46:51,921 - INFO -   Epoch [130/132] Loss: 0.5683
+2026-04-07 11:46:53,202 - INFO -   Train Loss: 0.6352
+2026-04-07 11:46:53,202 - INFO -   Train Accuracy: 75.81%
+2026-04-07 11:46:53,202 - INFO -   Val Loss: 0.5647
+2026-04-07 11:46:53,202 - INFO -   Val Accuracy: 74.22% | F1: 0.7404
+2026-04-07 11:46:53,202 - INFO -   LR: 0.000013
+2026-04-07 11:46:53,202 - INFO -   Patience: 10/30
+2026-04-07 11:46:53,202 - INFO - 
+Epoch 38/300
+2026-04-07 11:46:54,877 - INFO -   Epoch [10/132] Loss: 0.7910
+2026-04-07 11:46:56,515 - INFO -   Epoch [20/132] Loss: 0.9316
+2026-04-07 11:46:58,188 - INFO -   Epoch [30/132] Loss: 0.8330
+2026-04-07 11:46:59,852 - INFO -   Epoch [40/132] Loss: 0.4555
+2026-04-07 11:47:01,521 - INFO -   Epoch [50/132] Loss: 0.6690
+2026-04-07 11:47:03,214 - INFO -   Epoch [60/132] Loss: 0.9151
+2026-04-07 11:47:04,883 - INFO -   Epoch [70/132] Loss: 0.7688
+2026-04-07 11:47:06,560 - INFO -   Epoch [80/132] Loss: 0.9065
+2026-04-07 11:47:08,209 - INFO -   Epoch [90/132] Loss: 0.2745
+2026-04-07 11:47:09,898 - INFO -   Epoch [100/132] Loss: 0.5203
+2026-04-07 11:47:11,581 - INFO -   Epoch [110/132] Loss: 0.5852
+2026-04-07 11:47:13,260 - INFO -   Epoch [120/132] Loss: 0.4370
+2026-04-07 11:47:14,902 - INFO -   Epoch [130/132] Loss: 0.5923
+2026-04-07 11:47:16,185 - INFO -   Train Loss: 0.6374
+2026-04-07 11:47:16,185 - INFO -   Train Accuracy: 74.60%
+2026-04-07 11:47:16,185 - INFO -   Val Loss: 0.5582
+2026-04-07 11:47:16,185 - INFO -   Val Accuracy: 75.11% | F1: 0.7489
+2026-04-07 11:47:16,186 - INFO -   LR: 0.000013
+2026-04-07 11:47:16,186 - INFO -   Patience: 11/30
+2026-04-07 11:47:16,186 - INFO - 
+Epoch 39/300
+2026-04-07 11:47:17,885 - INFO -   Epoch [10/132] Loss: 0.5265
+2026-04-07 11:47:19,559 - INFO -   Epoch [20/132] Loss: 0.6796
+2026-04-07 11:47:21,219 - INFO -   Epoch [30/132] Loss: 0.5468
+2026-04-07 11:47:22,892 - INFO -   Epoch [40/132] Loss: 0.4318
+2026-04-07 11:47:24,596 - INFO -   Epoch [50/132] Loss: 0.9466
+2026-04-07 11:47:26,272 - INFO -   Epoch [60/132] Loss: 0.7202
+2026-04-07 11:47:27,917 - INFO -   Epoch [70/132] Loss: 0.3480
+2026-04-07 11:47:29,597 - INFO -   Epoch [80/132] Loss: 0.5497
+2026-04-07 11:47:31,291 - INFO -   Epoch [90/132] Loss: 0.9554
+2026-04-07 11:47:32,972 - INFO -   Epoch [100/132] Loss: 0.8347
+2026-04-07 11:47:34,658 - INFO -   Epoch [110/132] Loss: 1.1170
+2026-04-07 11:47:36,344 - INFO -   Epoch [120/132] Loss: 0.5863
+2026-04-07 11:47:38,003 - INFO -   Epoch [130/132] Loss: 0.6818
+2026-04-07 11:47:39,301 - INFO -   Train Loss: 0.6380
+2026-04-07 11:47:39,302 - INFO -   Train Accuracy: 75.17%
+2026-04-07 11:47:39,302 - INFO -   Val Loss: 0.5579
+2026-04-07 11:47:39,302 - INFO -   Val Accuracy: 75.11% | F1: 0.7495
+2026-04-07 11:47:39,302 - INFO -   LR: 0.000013
+2026-04-07 11:47:39,302 - INFO -   Patience: 12/30
+2026-04-07 11:47:39,302 - INFO - 
+Epoch 40/300
+2026-04-07 11:47:40,981 - INFO -   Epoch [10/132] Loss: 0.7885
+2026-04-07 11:47:42,649 - INFO -   Epoch [20/132] Loss: 0.9112
+2026-04-07 11:47:44,341 - INFO -   Epoch [30/132] Loss: 0.8706
+2026-04-07 11:47:46,038 - INFO -   Epoch [40/132] Loss: 0.3815
+2026-04-07 11:47:47,724 - INFO -   Epoch [50/132] Loss: 1.0567
+2026-04-07 11:47:49,384 - INFO -   Epoch [60/132] Loss: 0.6592
+2026-04-07 11:47:51,051 - INFO -   Epoch [70/132] Loss: 0.4972
+2026-04-07 11:47:52,735 - INFO -   Epoch [80/132] Loss: 0.3496
+2026-04-07 11:47:54,413 - INFO -   Epoch [90/132] Loss: 0.7928
+2026-04-07 11:47:56,058 - INFO -   Epoch [100/132] Loss: 0.4830
+2026-04-07 11:47:57,724 - INFO -   Epoch [110/132] Loss: 0.5151
+2026-04-07 11:47:59,401 - INFO -   Epoch [120/132] Loss: 0.8977
+2026-04-07 11:48:01,067 - INFO -   Epoch [130/132] Loss: 0.9006
+2026-04-07 11:48:02,308 - INFO -   Train Loss: 0.6364
+2026-04-07 11:48:02,309 - INFO -   Train Accuracy: 75.11%
+2026-04-07 11:48:02,309 - INFO -   Val Loss: 0.5571
+2026-04-07 11:48:02,309 - INFO -   Val Accuracy: 76.44% | F1: 0.7640
+2026-04-07 11:48:02,309 - INFO -   LR: 0.000006
+2026-04-07 11:48:02,309 - INFO -   Patience: 13/30
+2026-04-07 11:48:02,309 - INFO - 
+Epoch 41/300
+2026-04-07 11:48:03,972 - INFO -   Epoch [10/132] Loss: 0.7113
+2026-04-07 11:48:05,640 - INFO -   Epoch [20/132] Loss: 0.5180
+2026-04-07 11:48:07,286 - INFO -   Epoch [30/132] Loss: 0.7336
+2026-04-07 11:48:08,997 - INFO -   Epoch [40/132] Loss: 0.6226
+2026-04-07 11:48:10,690 - INFO -   Epoch [50/132] Loss: 0.7628
+2026-04-07 11:48:12,338 - INFO -   Epoch [60/132] Loss: 0.8195
+2026-04-07 11:48:14,001 - INFO -   Epoch [70/132] Loss: 0.2836
+2026-04-07 11:48:15,672 - INFO -   Epoch [80/132] Loss: 0.6384
+2026-04-07 11:48:17,339 - INFO -   Epoch [90/132] Loss: 0.4938
+2026-04-07 11:48:18,983 - INFO -   Epoch [100/132] Loss: 1.0888
+2026-04-07 11:48:20,665 - INFO -   Epoch [110/132] Loss: 0.5797
+2026-04-07 11:48:22,385 - INFO -   Epoch [120/132] Loss: 0.8199
+2026-04-07 11:48:24,040 - INFO -   Epoch [130/132] Loss: 1.2062
+2026-04-07 11:48:25,341 - INFO -   Train Loss: 0.6367
+2026-04-07 11:48:25,341 - INFO -   Train Accuracy: 75.24%
+2026-04-07 11:48:25,341 - INFO -   Val Loss: 0.5607
+2026-04-07 11:48:25,341 - INFO -   Val Accuracy: 75.11% | F1: 0.7495
+2026-04-07 11:48:25,342 - INFO -   LR: 0.000006
+2026-04-07 11:48:25,342 - INFO -   Patience: 14/30
+2026-04-07 11:48:25,342 - INFO - 
+Epoch 42/300
+2026-04-07 11:48:27,037 - INFO -   Epoch [10/132] Loss: 0.3948
+2026-04-07 11:48:28,738 - INFO -   Epoch [20/132] Loss: 0.3856
+2026-04-07 11:48:30,411 - INFO -   Epoch [30/132] Loss: 0.4116
+2026-04-07 11:48:32,088 - INFO -   Epoch [40/132] Loss: 0.6901
+2026-04-07 11:48:33,751 - INFO -   Epoch [50/132] Loss: 0.6375
+2026-04-07 11:48:35,411 - INFO -   Epoch [60/132] Loss: 0.7975
+2026-04-07 11:48:37,085 - INFO -   Epoch [70/132] Loss: 0.6724
+2026-04-07 11:48:38,769 - INFO -   Epoch [80/132] Loss: 0.3825
+2026-04-07 11:48:40,439 - INFO -   Epoch [90/132] Loss: 0.6090
+2026-04-07 11:48:42,148 - INFO -   Epoch [100/132] Loss: 0.8166
+2026-04-07 11:48:43,828 - INFO -   Epoch [110/132] Loss: 0.9970
+2026-04-07 11:48:45,523 - INFO -   Epoch [120/132] Loss: 0.3913
+2026-04-07 11:48:47,202 - INFO -   Epoch [130/132] Loss: 0.4276
+2026-04-07 11:48:48,468 - INFO -   Train Loss: 0.6377
+2026-04-07 11:48:48,468 - INFO -   Train Accuracy: 76.25%
+2026-04-07 11:48:48,468 - INFO -   Val Loss: 0.5622
+2026-04-07 11:48:48,468 - INFO -   Val Accuracy: 75.11% | F1: 0.7495
+2026-04-07 11:48:48,468 - INFO -   LR: 0.000006
+2026-04-07 11:48:48,468 - INFO -   Patience: 15/30
+2026-04-07 11:48:48,468 - INFO - 
+Epoch 43/300
+2026-04-07 11:48:50,151 - INFO -   Epoch [10/132] Loss: 1.2518
+2026-04-07 11:48:51,833 - INFO -   Epoch [20/132] Loss: 0.1524
+2026-04-07 11:48:53,485 - INFO -   Epoch [30/132] Loss: 0.8214
+2026-04-07 11:48:55,175 - INFO -   Epoch [40/132] Loss: 0.6954
+2026-04-07 11:48:56,848 - INFO -   Epoch [50/132] Loss: 0.6296
+2026-04-07 11:48:58,537 - INFO -   Epoch [60/132] Loss: 0.2749
+2026-04-07 11:49:00,181 - INFO -   Epoch [70/132] Loss: 0.5987
+2026-04-07 11:49:01,866 - INFO -   Epoch [80/132] Loss: 0.4869
+2026-04-07 11:49:03,567 - INFO -   Epoch [90/132] Loss: 0.4883
+2026-04-07 11:49:05,248 - INFO -   Epoch [100/132] Loss: 0.6239
+2026-04-07 11:49:06,912 - INFO -   Epoch [110/132] Loss: 0.7162
+2026-04-07 11:49:08,581 - INFO -   Epoch [120/132] Loss: 0.4394
+2026-04-07 11:49:10,274 - INFO -   Epoch [130/132] Loss: 0.6227
+2026-04-07 11:49:11,596 - INFO -   Train Loss: 0.6233
+2026-04-07 11:49:11,597 - INFO -   Train Accuracy: 75.62%
+2026-04-07 11:49:11,597 - INFO -   Val Loss: 0.5627
+2026-04-07 11:49:11,597 - INFO -   Val Accuracy: 74.67% | F1: 0.7442
+2026-04-07 11:49:11,597 - INFO -   LR: 0.000006
+2026-04-07 11:49:11,597 - INFO -   Patience: 16/30
+2026-04-07 11:49:11,597 - INFO - 
+Epoch 44/300
+2026-04-07 11:49:13,248 - INFO -   Epoch [10/132] Loss: 0.1694
+2026-04-07 11:49:14,920 - INFO -   Epoch [20/132] Loss: 0.5730
+2026-04-07 11:49:16,602 - INFO -   Epoch [30/132] Loss: 0.3695
+2026-04-07 11:49:18,277 - INFO -   Epoch [40/132] Loss: 0.7655
+2026-04-07 11:49:19,942 - INFO -   Epoch [50/132] Loss: 0.7865
+2026-04-07 11:49:21,636 - INFO -   Epoch [60/132] Loss: 0.8674
+2026-04-07 11:49:23,344 - INFO -   Epoch [70/132] Loss: 0.5914
+2026-04-07 11:49:25,039 - INFO -   Epoch [80/132] Loss: 0.6835
+2026-04-07 11:49:26,725 - INFO -   Epoch [90/132] Loss: 0.7768
+2026-04-07 11:49:28,394 - INFO -   Epoch [100/132] Loss: 0.6142
+2026-04-07 11:49:30,079 - INFO -   Epoch [110/132] Loss: 0.6048
+2026-04-07 11:49:31,765 - INFO -   Epoch [120/132] Loss: 0.4970
+2026-04-07 11:49:33,444 - INFO -   Epoch [130/132] Loss: 0.2754
+2026-04-07 11:49:34,685 - INFO -   Train Loss: 0.6548
+2026-04-07 11:49:34,685 - INFO -   Train Accuracy: 74.41%
+2026-04-07 11:49:34,685 - INFO -   Val Loss: 0.5561
+2026-04-07 11:49:34,685 - INFO -   Val Accuracy: 75.11% | F1: 0.7489
+2026-04-07 11:49:34,685 - INFO -   LR: 0.000006
+2026-04-07 11:49:34,685 - INFO -   Patience: 17/30
+2026-04-07 11:49:34,685 - INFO - 
+Epoch 45/300
+2026-04-07 11:49:36,334 - INFO -   Epoch [10/132] Loss: 0.5242
+2026-04-07 11:49:38,022 - INFO -   Epoch [20/132] Loss: 0.7494
+2026-04-07 11:49:39,720 - INFO -   Epoch [30/132] Loss: 0.7434
+2026-04-07 11:49:41,412 - INFO -   Epoch [40/132] Loss: 0.4301
+2026-04-07 11:49:43,071 - INFO -   Epoch [50/132] Loss: 0.9353
+2026-04-07 11:49:44,756 - INFO -   Epoch [60/132] Loss: 0.3508
+2026-04-07 11:49:46,434 - INFO -   Epoch [70/132] Loss: 0.7860
+2026-04-07 11:49:48,120 - INFO -   Epoch [80/132] Loss: 1.0047
+2026-04-07 11:49:49,797 - INFO -   Epoch [90/132] Loss: 0.6428
+2026-04-07 11:49:51,489 - INFO -   Epoch [100/132] Loss: 0.4112
+2026-04-07 11:49:53,171 - INFO -   Epoch [110/132] Loss: 0.3204
+2026-04-07 11:49:54,860 - INFO -   Epoch [120/132] Loss: 0.3054
+2026-04-07 11:49:56,525 - INFO -   Epoch [130/132] Loss: 0.6641
+2026-04-07 11:49:57,829 - INFO -   Train Loss: 0.6263
+2026-04-07 11:49:57,830 - INFO -   Train Accuracy: 76.13%
+2026-04-07 11:49:57,830 - INFO -   Val Loss: 0.5576
+2026-04-07 11:49:57,830 - INFO -   Val Accuracy: 75.11% | F1: 0.7481
+2026-04-07 11:49:57,830 - INFO -   LR: 0.000006
+2026-04-07 11:49:57,830 - INFO -   Patience: 18/30
+2026-04-07 11:49:57,830 - INFO - 
+Epoch 46/300
+2026-04-07 11:49:59,513 - INFO -   Epoch [10/132] Loss: 0.5434
+2026-04-07 11:50:01,243 - INFO -   Epoch [20/132] Loss: 0.4615
+2026-04-07 11:50:02,936 - INFO -   Epoch [30/132] Loss: 0.8918
+2026-04-07 11:50:04,955 - INFO -   Epoch [40/132] Loss: 0.8272
+2026-04-07 11:50:07,283 - INFO -   Epoch [50/132] Loss: 0.7424
+2026-04-07 11:50:09,957 - INFO -   Epoch [60/132] Loss: 0.6096
+2026-04-07 11:50:12,188 - INFO -   Epoch [70/132] Loss: 1.0530
+2026-04-07 11:50:14,591 - INFO -   Epoch [80/132] Loss: 0.4668
+2026-04-07 11:50:16,842 - INFO -   Epoch [90/132] Loss: 0.2786
+2026-04-07 11:50:19,299 - INFO -   Epoch [100/132] Loss: 0.5086
+2026-04-07 11:50:21,770 - INFO -   Epoch [110/132] Loss: 0.7343
+2026-04-07 11:50:24,197 - INFO -   Epoch [120/132] Loss: 0.7300
+2026-04-07 11:50:26,674 - INFO -   Epoch [130/132] Loss: 0.6255
+2026-04-07 11:50:28,201 - INFO -   Train Loss: 0.6350
+2026-04-07 11:50:28,202 - INFO -   Train Accuracy: 74.98%
+2026-04-07 11:50:28,202 - INFO -   Val Loss: 0.5584
+2026-04-07 11:50:28,202 - INFO -   Val Accuracy: 75.11% | F1: 0.7487
+2026-04-07 11:50:28,202 - INFO -   LR: 0.000003
+2026-04-07 11:50:28,202 - INFO -   Patience: 19/30
+2026-04-07 11:50:28,202 - INFO - 
+Epoch 47/300
+2026-04-07 11:50:30,548 - INFO -   Epoch [10/132] Loss: 0.4141
+2026-04-07 11:50:32,871 - INFO -   Epoch [20/132] Loss: 0.5595
+2026-04-07 11:50:35,320 - INFO -   Epoch [30/132] Loss: 0.3960
+2026-04-07 11:50:37,960 - INFO -   Epoch [40/132] Loss: 0.5257
+2026-04-07 11:50:40,352 - INFO -   Epoch [50/132] Loss: 0.4346
+2026-04-07 11:50:42,796 - INFO -   Epoch [60/132] Loss: 1.3281
+2026-04-07 11:50:45,344 - INFO -   Epoch [70/132] Loss: 1.1066
+2026-04-07 11:50:47,619 - INFO -   Epoch [80/132] Loss: 0.8079
+2026-04-07 11:50:49,867 - INFO -   Epoch [90/132] Loss: 0.9960
+2026-04-07 11:50:52,324 - INFO -   Epoch [100/132] Loss: 0.3221
+2026-04-07 11:50:54,809 - INFO -   Epoch [110/132] Loss: 0.5218
+2026-04-07 11:50:57,166 - INFO -   Epoch [120/132] Loss: 0.7303
+2026-04-07 11:50:59,458 - INFO -   Epoch [130/132] Loss: 0.4320
+2026-04-07 11:51:01,109 - INFO -   Train Loss: 0.6491
+2026-04-07 11:51:01,110 - INFO -   Train Accuracy: 74.73%
+2026-04-07 11:51:01,110 - INFO -   Val Loss: 0.5576
+2026-04-07 11:51:01,110 - INFO -   Val Accuracy: 75.11% | F1: 0.7481
+2026-04-07 11:51:01,110 - INFO -   LR: 0.000003
+2026-04-07 11:51:01,110 - INFO -   Patience: 20/30
+2026-04-07 11:51:01,110 - INFO - 
+Epoch 48/300
+2026-04-07 11:51:03,310 - INFO -   Epoch [10/132] Loss: 0.4469
+2026-04-07 11:51:05,893 - INFO -   Epoch [20/132] Loss: 0.5939
+2026-04-07 11:51:08,438 - INFO -   Epoch [30/132] Loss: 0.5783
+2026-04-07 11:51:11,076 - INFO -   Epoch [40/132] Loss: 1.2676
+2026-04-07 11:51:13,564 - INFO -   Epoch [50/132] Loss: 1.2520
+2026-04-07 11:51:15,988 - INFO -   Epoch [60/132] Loss: 0.7519
+2026-04-07 11:51:18,420 - INFO -   Epoch [70/132] Loss: 0.8706
+2026-04-07 11:51:20,702 - INFO -   Epoch [80/132] Loss: 0.7318
+2026-04-07 11:51:23,079 - INFO -   Epoch [90/132] Loss: 0.5018
+2026-04-07 11:51:25,408 - INFO -   Epoch [100/132] Loss: 1.1095
+2026-04-07 11:51:27,877 - INFO -   Epoch [110/132] Loss: 0.3782
+2026-04-07 11:51:30,297 - INFO -   Epoch [120/132] Loss: 0.4816
+2026-04-07 11:51:32,726 - INFO -   Epoch [130/132] Loss: 0.6370
+2026-04-07 11:51:34,213 - INFO -   Train Loss: 0.6450
+2026-04-07 11:51:34,214 - INFO -   Train Accuracy: 73.97%
+2026-04-07 11:51:34,214 - INFO -   Val Loss: 0.5600
+2026-04-07 11:51:34,214 - INFO -   Val Accuracy: 75.11% | F1: 0.7481
+2026-04-07 11:51:34,214 - INFO -   LR: 0.000003
+2026-04-07 11:51:34,214 - INFO -   Patience: 21/30
+2026-04-07 11:51:34,214 - INFO - 
+Epoch 49/300
+2026-04-07 11:51:36,542 - INFO -   Epoch [10/132] Loss: 0.6634
+2026-04-07 11:51:38,904 - INFO -   Epoch [20/132] Loss: 0.8993
+2026-04-07 11:51:41,334 - INFO -   Epoch [30/132] Loss: 0.2689
+2026-04-07 11:51:43,780 - INFO -   Epoch [40/132] Loss: 0.9873
+2026-04-07 11:51:46,162 - INFO -   Epoch [50/132] Loss: 0.5431
+2026-04-07 11:51:48,472 - INFO -   Epoch [60/132] Loss: 0.8673
+2026-04-07 11:51:50,800 - INFO -   Epoch [70/132] Loss: 0.9019
+2026-04-07 11:51:53,130 - INFO -   Epoch [80/132] Loss: 0.6427
+2026-04-07 11:51:55,599 - INFO -   Epoch [90/132] Loss: 0.2900
+2026-04-07 11:51:57,993 - INFO -   Epoch [100/132] Loss: 0.7990
+2026-04-07 11:52:00,451 - INFO -   Epoch [110/132] Loss: 0.6515
+2026-04-07 11:52:02,734 - INFO -   Epoch [120/132] Loss: 0.3372
+2026-04-07 11:52:04,982 - INFO -   Epoch [130/132] Loss: 0.8132
+2026-04-07 11:52:06,950 - INFO -   Train Loss: 0.6227
+2026-04-07 11:52:06,951 - INFO -   Train Accuracy: 75.62%
+2026-04-07 11:52:06,951 - INFO -   Val Loss: 0.5579
+2026-04-07 11:52:06,951 - INFO -   Val Accuracy: 75.11% | F1: 0.7481
+2026-04-07 11:52:06,951 - INFO -   LR: 0.000003
+2026-04-07 11:52:06,951 - INFO -   Patience: 22/30
+2026-04-07 11:52:06,951 - INFO - 
+Epoch 50/300
+2026-04-07 11:52:09,378 - INFO -   Epoch [10/132] Loss: 0.9435
+2026-04-07 11:52:11,825 - INFO -   Epoch [20/132] Loss: 0.3256
+2026-04-07 11:52:14,179 - INFO -   Epoch [30/132] Loss: 1.0166
+2026-04-07 11:52:16,494 - INFO -   Epoch [40/132] Loss: 0.7821
+2026-04-07 11:52:18,840 - INFO -   Epoch [50/132] Loss: 0.6527
+2026-04-07 11:52:21,167 - INFO -   Epoch [60/132] Loss: 0.4320
+2026-04-07 11:52:23,628 - INFO -   Epoch [70/132] Loss: 1.0606
+2026-04-07 11:52:26,065 - INFO -   Epoch [80/132] Loss: 0.3982
+2026-04-07 11:52:28,485 - INFO -   Epoch [90/132] Loss: 0.5268
+2026-04-07 11:52:30,745 - INFO -   Epoch [100/132] Loss: 0.4926
+2026-04-07 11:52:33,065 - INFO -   Epoch [110/132] Loss: 0.5943
+2026-04-07 11:52:35,417 - INFO -   Epoch [120/132] Loss: 1.1868
+2026-04-07 11:52:37,887 - INFO -   Epoch [130/132] Loss: 0.6199
+2026-04-07 11:52:39,680 - INFO -   Train Loss: 0.6335
+2026-04-07 11:52:39,680 - INFO -   Train Accuracy: 74.79%
+2026-04-07 11:52:39,680 - INFO -   Val Loss: 0.5603
+2026-04-07 11:52:39,681 - INFO -   Val Accuracy: 75.11% | F1: 0.7489
+2026-04-07 11:52:39,681 - INFO -   LR: 0.000003
+2026-04-07 11:52:39,681 - INFO -   Patience: 23/30
+2026-04-07 11:52:39,681 - INFO - 
+Epoch 51/300
+2026-04-07 11:52:42,092 - INFO -   Epoch [10/132] Loss: 0.7198
+2026-04-07 11:52:44,420 - INFO -   Epoch [20/132] Loss: 0.7856
+2026-04-07 11:52:46,900 - INFO -   Epoch [30/132] Loss: 0.8182
+2026-04-07 11:52:49,141 - INFO -   Epoch [40/132] Loss: 0.5210
+2026-04-07 11:52:51,621 - INFO -   Epoch [50/132] Loss: 0.4123
+2026-04-07 11:52:54,142 - INFO -   Epoch [60/132] Loss: 0.5050
+2026-04-07 11:52:56,577 - INFO -   Epoch [70/132] Loss: 0.6232
+2026-04-07 11:52:58,971 - INFO -   Epoch [80/132] Loss: 0.5084
+2026-04-07 11:53:01,291 - INFO -   Epoch [90/132] Loss: 0.6145
+2026-04-07 11:53:03,631 - INFO -   Epoch [100/132] Loss: 0.3393
+2026-04-07 11:53:06,040 - INFO -   Epoch [110/132] Loss: 0.5567
+2026-04-07 11:53:08,498 - INFO -   Epoch [120/132] Loss: 0.8920
+2026-04-07 11:53:10,917 - INFO -   Epoch [130/132] Loss: 0.6611
+2026-04-07 11:53:12,719 - INFO -   Train Loss: 0.6213
+2026-04-07 11:53:12,719 - INFO -   Train Accuracy: 75.94%
+2026-04-07 11:53:12,719 - INFO -   Val Loss: 0.5634
+2026-04-07 11:53:12,719 - INFO -   Val Accuracy: 74.67% | F1: 0.7436
+2026-04-07 11:53:12,719 - INFO -   LR: 0.000003
+2026-04-07 11:53:12,719 - INFO -   Patience: 24/30
+2026-04-07 11:53:12,720 - INFO - 
+Epoch 52/300
+2026-04-07 11:53:15,126 - INFO -   Epoch [10/132] Loss: 0.3766
+2026-04-07 11:53:17,408 - INFO -   Epoch [20/132] Loss: 0.4641
+2026-04-07 11:53:19,719 - INFO -   Epoch [30/132] Loss: 0.4372
+2026-04-07 11:53:22,069 - INFO -   Epoch [40/132] Loss: 0.8430
+2026-04-07 11:53:24,552 - INFO -   Epoch [50/132] Loss: 0.2484
+2026-04-07 11:53:26,965 - INFO -   Epoch [60/132] Loss: 0.4402
+2026-04-07 11:53:29,383 - INFO -   Epoch [70/132] Loss: 0.7630
+2026-04-07 11:53:31,678 - INFO -   Epoch [80/132] Loss: 0.5593
+2026-04-07 11:53:34,177 - INFO -   Epoch [90/132] Loss: 0.5757
+2026-04-07 11:53:36,436 - INFO -   Epoch [100/132] Loss: 0.5627
+2026-04-07 11:53:38,872 - INFO -   Epoch [110/132] Loss: 0.9119
+2026-04-07 11:53:41,334 - INFO -   Epoch [120/132] Loss: 0.5585
+2026-04-07 11:53:43,727 - INFO -   Epoch [130/132] Loss: 0.6557
+2026-04-07 11:53:45,551 - INFO -   Train Loss: 0.6214
+2026-04-07 11:53:45,551 - INFO -   Train Accuracy: 76.13%
+2026-04-07 11:53:45,551 - INFO -   Val Loss: 0.5602
+2026-04-07 11:53:45,551 - INFO -   Val Accuracy: 74.67% | F1: 0.7440
+2026-04-07 11:53:45,551 - INFO -   LR: 0.000002
+2026-04-07 11:53:45,551 - INFO -   Patience: 25/30
+2026-04-07 11:53:45,551 - INFO - 
+Epoch 53/300
+2026-04-07 11:53:47,793 - INFO -   Epoch [10/132] Loss: 0.4121
+2026-04-07 11:53:50,029 - INFO -   Epoch [20/132] Loss: 0.4280
+2026-04-07 11:53:52,496 - INFO -   Epoch [30/132] Loss: 0.2329
+2026-04-07 11:53:54,964 - INFO -   Epoch [40/132] Loss: 0.8982
+2026-04-07 11:53:57,411 - INFO -   Epoch [50/132] Loss: 0.4946
+2026-04-07 11:53:59,724 - INFO -   Epoch [60/132] Loss: 0.4218
+2026-04-07 11:54:02,100 - INFO -   Epoch [70/132] Loss: 0.5730
+2026-04-07 11:54:04,329 - INFO -   Epoch [80/132] Loss: 0.8189
+2026-04-07 11:54:06,763 - INFO -   Epoch [90/132] Loss: 0.5393
+2026-04-07 11:54:09,221 - INFO -   Epoch [100/132] Loss: 0.5177
+2026-04-07 11:54:11,670 - INFO -   Epoch [110/132] Loss: 0.8589
+2026-04-07 11:54:14,094 - INFO -   Epoch [120/132] Loss: 0.6676
+2026-04-07 11:54:16,360 - INFO -   Epoch [130/132] Loss: 0.3533
+2026-04-07 11:54:18,107 - INFO -   Train Loss: 0.6315
+2026-04-07 11:54:18,119 - INFO -   Train Accuracy: 74.92%
+2026-04-07 11:54:18,119 - INFO -   Val Loss: 0.5590
+2026-04-07 11:54:18,119 - INFO -   Val Accuracy: 74.67% | F1: 0.7440
+2026-04-07 11:54:18,119 - INFO -   LR: 0.000002
+2026-04-07 11:54:18,119 - INFO -   Patience: 26/30
+2026-04-07 11:54:18,119 - INFO - 
+Epoch 54/300
+2026-04-07 11:54:20,496 - INFO -   Epoch [10/132] Loss: 0.7069
+2026-04-07 11:54:22,951 - INFO -   Epoch [20/132] Loss: 0.3538
+2026-04-07 11:54:25,432 - INFO -   Epoch [30/132] Loss: 0.7197
+2026-04-07 11:54:27,863 - INFO -   Epoch [40/132] Loss: 0.3976
+2026-04-07 11:54:30,283 - INFO -   Epoch [50/132] Loss: 0.7417
+2026-04-07 11:54:32,582 - INFO -   Epoch [60/132] Loss: 0.4473
+2026-04-07 11:54:34,833 - INFO -   Epoch [70/132] Loss: 0.3691
+2026-04-07 11:54:37,309 - INFO -   Epoch [80/132] Loss: 0.6474
+2026-04-07 11:54:39,779 - INFO -   Epoch [90/132] Loss: 0.7628
+2026-04-07 11:54:42,246 - INFO -   Epoch [100/132] Loss: 0.6058
+2026-04-07 11:54:44,557 - INFO -   Epoch [110/132] Loss: 0.3765
+2026-04-07 11:54:46,961 - INFO -   Epoch [120/132] Loss: 0.8978
+2026-04-07 11:54:49,196 - INFO -   Epoch [130/132] Loss: 0.6452
+2026-04-07 11:54:51,193 - INFO -   Train Loss: 0.6086
+2026-04-07 11:54:51,193 - INFO -   Train Accuracy: 77.78%
+2026-04-07 11:54:51,193 - INFO -   Val Loss: 0.5592
+2026-04-07 11:54:51,193 - INFO -   Val Accuracy: 74.67% | F1: 0.7451
+2026-04-07 11:54:51,193 - INFO -   LR: 0.000002
+2026-04-07 11:54:51,193 - INFO -   Patience: 27/30
+2026-04-07 11:54:51,193 - INFO - 
+Epoch 55/300
+2026-04-07 11:54:53,676 - INFO -   Epoch [10/132] Loss: 0.4349
+2026-04-07 11:54:56,141 - INFO -   Epoch [20/132] Loss: 0.6768
+2026-04-07 11:54:58,592 - INFO -   Epoch [30/132] Loss: 0.6074
+2026-04-07 11:55:00,794 - INFO -   Epoch [40/132] Loss: 1.0703
+2026-04-07 11:55:03,221 - INFO -   Epoch [50/132] Loss: 0.5264
+2026-04-07 11:55:05,461 - INFO -   Epoch [60/132] Loss: 0.9055
+2026-04-07 11:55:07,903 - INFO -   Epoch [70/132] Loss: 0.1994
+2026-04-07 11:55:10,389 - INFO -   Epoch [80/132] Loss: 0.5228
+2026-04-07 11:55:12,827 - INFO -   Epoch [90/132] Loss: 0.5373
+2026-04-07 11:55:15,281 - INFO -   Epoch [100/132] Loss: 0.6817
+2026-04-07 11:55:17,567 - INFO -   Epoch [110/132] Loss: 0.6538
+2026-04-07 11:55:19,944 - INFO -   Epoch [120/132] Loss: 0.4959
+2026-04-07 11:55:22,331 - INFO -   Epoch [130/132] Loss: 0.5100
+2026-04-07 11:55:24,457 - INFO -   Train Loss: 0.6304
+2026-04-07 11:55:24,457 - INFO -   Train Accuracy: 75.37%
+2026-04-07 11:55:24,457 - INFO -   Val Loss: 0.5597
+2026-04-07 11:55:24,457 - INFO -   Val Accuracy: 74.67% | F1: 0.7449
+2026-04-07 11:55:24,457 - INFO -   LR: 0.000002
+2026-04-07 11:55:24,457 - INFO -   Patience: 28/30
+2026-04-07 11:55:24,457 - INFO - 
+Epoch 56/300
+2026-04-07 11:55:26,880 - INFO -   Epoch [10/132] Loss: 0.5688
+2026-04-07 11:55:29,323 - INFO -   Epoch [20/132] Loss: 0.9313
+2026-04-07 11:55:31,782 - INFO -   Epoch [30/132] Loss: 0.6214
+2026-04-07 11:55:34,139 - INFO -   Epoch [40/132] Loss: 0.4391
+2026-04-07 11:55:36,265 - INFO -   Epoch [50/132] Loss: 0.7884
+2026-04-07 11:55:38,621 - INFO -   Epoch [60/132] Loss: 0.7764
+2026-04-07 11:55:40,659 - INFO -   Epoch [70/132] Loss: 0.3487
+2026-04-07 11:55:42,934 - INFO -   Epoch [80/132] Loss: 0.7681
+2026-04-07 11:55:45,084 - INFO -   Epoch [90/132] Loss: 0.8298
+2026-04-07 11:55:47,259 - INFO -   Epoch [100/132] Loss: 0.8837
+2026-04-07 11:55:50,003 - INFO -   Epoch [110/132] Loss: 0.5502
+2026-04-07 11:55:52,139 - INFO -   Epoch [120/132] Loss: 0.7721
+2026-04-07 11:55:54,304 - INFO -   Epoch [130/132] Loss: 0.7573
+2026-04-07 11:55:55,855 - INFO -   Train Loss: 0.6399
+2026-04-07 11:55:55,855 - INFO -   Train Accuracy: 73.97%
+2026-04-07 11:55:55,855 - INFO -   Val Loss: 0.5594
+2026-04-07 11:55:55,855 - INFO -   Val Accuracy: 74.67% | F1: 0.7449
+2026-04-07 11:55:55,855 - INFO -   LR: 0.000002
+2026-04-07 11:55:55,855 - INFO -   Patience: 29/30
+2026-04-07 11:55:55,855 - INFO - 
+Epoch 57/300
+2026-04-07 11:55:57,988 - INFO -   Epoch [10/132] Loss: 1.2965
+2026-04-07 11:56:00,149 - INFO -   Epoch [20/132] Loss: 0.9545
+2026-04-07 11:56:02,284 - INFO -   Epoch [30/132] Loss: 0.8451
+2026-04-07 11:56:04,274 - INFO -   Epoch [40/132] Loss: 0.5338
+2026-04-07 11:56:05,967 - INFO -   Epoch [50/132] Loss: 0.6972
+2026-04-07 11:56:07,625 - INFO -   Epoch [60/132] Loss: 0.8229
+2026-04-07 11:56:09,270 - INFO -   Epoch [70/132] Loss: 0.4235
+2026-04-07 11:56:10,921 - INFO -   Epoch [80/132] Loss: 0.6443
+2026-04-07 11:56:12,579 - INFO -   Epoch [90/132] Loss: 0.6139
+2026-04-07 11:56:14,238 - INFO -   Epoch [100/132] Loss: 0.8947
+2026-04-07 11:56:15,906 - INFO -   Epoch [110/132] Loss: 0.5089
+2026-04-07 11:56:17,568 - INFO -   Epoch [120/132] Loss: 0.9275
+2026-04-07 11:56:19,213 - INFO -   Epoch [130/132] Loss: 0.6993
+2026-04-07 11:56:20,500 - INFO -   Train Loss: 0.6415
+2026-04-07 11:56:20,586 - INFO -   Train Accuracy: 76.00%
+2026-04-07 11:56:20,586 - INFO -   Val Loss: 0.5615
+2026-04-07 11:56:20,586 - INFO -   Val Accuracy: 74.67% | F1: 0.7449
+2026-04-07 11:56:20,586 - INFO -   LR: 0.000002
+2026-04-07 11:56:20,586 - INFO -   Patience: 30/30
+2026-04-07 11:56:20,587 - INFO - 
+✓ Early stopping at epoch 57
+2026-04-07 11:56:20,587 - INFO - 
+✓ Training completed!
+2026-04-07 11:56:20,587 - INFO -   Best Accuracy: 77.78%
+2026-04-07 11:56:20,587 - INFO - 
+================================================================================
+2026-04-07 11:56:20,587 - INFO - Step 7: Testing
+2026-04-07 11:56:20,587 - INFO - ================================================================================
+/workspace/Graph_Deep_Learning/20251001-PRD_18-21-24-mobility_change_pattern/analysis/PRD-Mobility-Change-Pattern/train_multiscale_temporal.py:1072: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(f"{output_dir}/models/best_model.pth")
+2026-04-07 11:56:20,679 - INFO - ✓ Loaded best model from epoch 27
+2026-04-07 11:56:22,599 - INFO - 
+Test Results:
+2026-04-07 11:56:22,600 - INFO -   - Accuracy: 74.89%
+2026-04-07 11:56:22,600 - INFO -   - F1 Score: 0.7464
+2026-04-07 11:56:22,603 - INFO -   - Kappa: 0.7170
+2026-04-07 11:56:22,647 - INFO -   - Kappa: 0.7170
+2026-04-07 11:56:22,658 - INFO - 
+✓ All results saved to outputs/multiscale_temporal_20260407_113157_sampled_labels_spc250_seed202_reconstructed_phase50_spc250_delta_mean/metrics/
+2026-04-07 11:56:22,658 - INFO -   - test_results.json
+2026-04-07 11:56:22,658 - INFO -   - classification_report.txt
+2026-04-07 11:56:22,658 - INFO -   - confusion_matrix.npy
+2026-04-07 11:56:22,658 - INFO - 
+================================================================================
+2026-04-07 11:56:22,659 - INFO - Training Time Statistics
+2026-04-07 11:56:22,659 - INFO - ================================================================================
+2026-04-07 11:56:22,659 - INFO - Start time:    2026-04-07 11:31:57
+2026-04-07 11:56:22,660 - INFO - End time:      2026-04-07 11:56:22
+2026-04-07 11:56:22,660 - INFO - Total time:    00:24:25 (1465.22 seconds)
+2026-04-07 11:56:22,660 - INFO -                (24.42 minutes, 0.41 hours)
+2026-04-07 11:56:22,660 - INFO - ================================================================================
+2026-04-07 11:56:22,660 - INFO - ✓ Timing info saved to outputs/multiscale_temporal_20260407_113157_sampled_labels_spc250_seed202_reconstructed_phase50_spc250_delta_mean/metrics/timing_info.json
+2026-04-07 11:56:22,660 - INFO - ================================================================================
+[LapPE] Loading from cache: outputs/.laplacian_pe_cache/lpe_n65049_k8_topk20x20.pt
+[LapPE] Loaded: torch.Size([65049, 8])

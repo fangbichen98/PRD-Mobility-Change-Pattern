@@ -140,6 +140,34 @@ class PureGraphDualYearGINE(nn.Module):
 
         return edge_attr
 
+    def _run_gine_layers(self, edge_index, edge_attr, node_features):
+        """Run GINE message-passing layers and return hidden representation before output_proj.
+
+        Args:
+            edge_index: Edge connectivity (2, num_edges)
+            edge_attr: Edge weights (num_edges, edge_dim)
+            node_features: Node features (num_nodes, input_size)
+
+        Returns:
+            h: Node hidden embeddings (num_nodes, hidden_size=128)
+        """
+        # Normalize edge features. Only flow channel (index 0) is log-transformed.
+        edge_features = self._normalize_edge_attr(edge_attr, edge_index)
+        edge_features = edge_features.clone()
+        edge_features[:, 0] = torch.log1p(torch.clamp(edge_features[:, 0], min=0.0))
+
+        if edge_index.dtype != torch.long:
+            edge_index = edge_index.long()
+
+        h = node_features
+        for gine_layer, bn in zip(self.gine_layers, self.batch_norms):
+            h = gine_layer(h, edge_index, edge_attr=edge_features)
+            h = bn(h)
+            h = self.act(h)
+            h = self.dropout(h)
+
+        return h  # (num_nodes, hidden_size)
+
     def process_year(self, edge_index, edge_attr, node_features):
         """
         Process one year's graph with GINE
@@ -152,32 +180,13 @@ class PureGraphDualYearGINE(nn.Module):
         Returns:
             h_out: Node embeddings (num_nodes, output_size)
         """
-        # Normalize edge features to (E, edge_dim). Only flow is log-transformed;
-        # geometric features remain in their original normalized ranges.
-        edge_features = self._normalize_edge_attr(edge_attr, edge_index)
-        edge_features = edge_features.clone()
-        edge_features[:, 0] = torch.log1p(torch.clamp(edge_features[:, 0], min=0.0))
-
-        # Ensure edge_index is int64
-        if edge_index.dtype != torch.long:
-            edge_index = edge_index.long()
-
-        h = node_features
-
-        # Apply GINE layers with batch normalization
-        for i, (gine_layer, bn) in enumerate(zip(self.gine_layers, self.batch_norms)):
-            h = gine_layer(h, edge_index, edge_attr=edge_features)
-            h = bn(h)
-            h = self.act(h)
-            h = self.dropout(h)
-
-        # Project to output size
-        h_out = self.output_proj(h)
-
-        return h_out
+        return self.output_proj(self._run_gine_layers(edge_index, edge_attr, node_features))
 
     def clear_cache(self):
-        """Clear cached embeddings"""
+        """Clear cached embeddings.
+        Note: cache now stores 128-dim hidden (from _run_gine_layers),
+        not the 256-dim projected output as in earlier versions.
+        """
         self._cached_2021 = None
         self._cached_2024 = None
         self._cache_valid = False
@@ -205,40 +214,42 @@ class PureGraphDualYearGINE(nn.Module):
         edge_index_2021, edge_attr_2021 = graphs_2021[0]
         edge_index_2024, edge_attr_2024 = graphs_2024[0]
 
-        # Process 2021 graph
+        # Run GINE layers for 2021, cache 128-dim hidden (not 256-dim output).
+        # Caching hidden saves half the memory vs caching output and is equivalent
+        # since output_proj is deterministic at inference.
         if self.training or self._cached_2021 is None:
-            h_2021_full = self.process_year(
-                edge_index_2021,
-                edge_attr_2021,
-                node_features_2021
+            h_2021_hidden = self._run_gine_layers(
+                edge_index_2021, edge_attr_2021, node_features_2021
             )
             if not self.training:
-                self._cached_2021 = h_2021_full
+                self._cached_2021 = h_2021_hidden
         else:
-            h_2021_full = self._cached_2021
+            h_2021_hidden = self._cached_2021
 
-        # Process 2024 graph
+        # Run GINE layers for 2024
         if self.training or self._cached_2024 is None:
-            h_2024_full = self.process_year(
-                edge_index_2024,
-                edge_attr_2024,
-                node_features_2024
+            h_2024_hidden = self._run_gine_layers(
+                edge_index_2024, edge_attr_2024, node_features_2024
             )
             if not self.training:
-                self._cached_2024 = h_2024_full
+                self._cached_2024 = h_2024_hidden
         else:
-            h_2024_full = self._cached_2024
+            h_2024_hidden = self._cached_2024
 
-        # Extract batch nodes if indices provided
+        # Extract batch nodes (still at 128-dim hidden level)
         if node_indices is not None:
-            h_2021 = h_2021_full[node_indices]
-            h_2024 = h_2024_full[node_indices]
+            h_2021_batch = h_2021_hidden[node_indices]
+            h_2024_batch = h_2024_hidden[node_indices]
         else:
-            h_2021 = h_2021_full
-            h_2024 = h_2024_full
+            h_2021_batch = h_2021_hidden
+            h_2024_batch = h_2024_hidden
 
-        # Compute difference
-        h_diff = h_2024 - h_2021
+        # Project to output_size. Compute diff at 128-dim before projection so
+        # the linear map acts on the true hidden-space change signal, not on the
+        # difference of two nearly-identical 256-dim projected outputs.
+        h_2021 = self.output_proj(h_2021_batch)
+        h_2024 = self.output_proj(h_2024_batch)
+        h_diff = self.output_proj(h_2024_batch - h_2021_batch)
 
         return h_2021, h_2024, h_diff
 

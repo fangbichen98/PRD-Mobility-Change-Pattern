@@ -458,11 +458,16 @@ class EnhancedDualBranchModel(nn.Module):
             features_2021 = torch.cat([features_2021, raw_graph_stats_2021], dim=1)
             features_2024 = torch.cat([features_2024, raw_graph_stats_2024], dim=1)
         elif self.spatial_node_feature_mode == 'raw_temporal_mean':
-            # (num_nodes, temporal_input_size) — mean over 168 time steps
-            raw_mean_2021 = torch.log1p(raw_x_2021.mean(dim=1))  # (N, feat_dim)
-            raw_mean_2024 = torch.log1p(raw_x_2024.mean(dim=1))
-            features_2021 = torch.cat([features_2021, raw_mean_2021], dim=1)
-            features_2024 = torch.cat([features_2024, raw_mean_2024], dim=1)
+            # Use the flow change (delta) rather than absolute yearly means.
+            # This separates responsibilities: temporal branch handles absolute patterns
+            # via the full 168-step sequence; spatial branch propagates the change signal
+            # through the graph. Both features_2021 and features_2024 receive the same
+            # delta_mean so year differentiation falls on LapPE and edge OD flows.
+            raw_mean_2021 = torch.log1p(raw_x_2021.mean(dim=1))  # (N, 2)
+            raw_mean_2024 = torch.log1p(raw_x_2024.mean(dim=1))  # (N, 2)
+            delta_mean = raw_mean_2024 - raw_mean_2021             # (N, 2)
+            features_2021 = torch.cat([features_2021, delta_mean], dim=1)
+            features_2024 = torch.cat([features_2024, delta_mean], dim=1)
         elif self.spatial_node_feature_mode == 'flow_wamd':
             if not hasattr(self, '_wamd_node_features_2021'):
                 raise ValueError("flow_wamd mode requires register_wamd_node_features() to be called first")
@@ -471,17 +476,13 @@ class EnhancedDualBranchModel(nn.Module):
         elif self.spatial_node_feature_mode == 'flow_degree_wamd':
             if not hasattr(self, '_fdw_node_features_2021'):
                 raise ValueError("flow_degree_wamd mode requires register_fdw_node_features() to be called first")
-            features_2021 = torch.cat([features_2021, self._fdw_node_features_2021.to(device),
-                                        self._fdw_node_features_2024.to(device)], dim=1)
-            features_2024 = torch.cat([features_2024, self._fdw_node_features_2021.to(device),
-                                        self._fdw_node_features_2024.to(device)], dim=1)
+            features_2021 = torch.cat([features_2021, self._fdw_node_features_2021.to(device)], dim=1)
+            features_2024 = torch.cat([features_2024, self._fdw_node_features_2024.to(device)], dim=1)
         elif self.spatial_node_feature_mode == 'flow_wamd_v2':
             if not hasattr(self, '_fw2_node_features_2021'):
                 raise ValueError("flow_wamd_v2 mode requires register_flow_wamd_v2_node_features() to be called first")
-            features_2021 = torch.cat([features_2021, self._fw2_node_features_2021.to(device),
-                                        self._fw2_node_features_2024.to(device)], dim=1)
-            features_2024 = torch.cat([features_2024, self._fw2_node_features_2021.to(device),
-                                        self._fw2_node_features_2024.to(device)], dim=1)
+            features_2021 = torch.cat([features_2021, self._fw2_node_features_2021.to(device)], dim=1)
+            features_2024 = torch.cat([features_2024, self._fw2_node_features_2024.to(device)], dim=1)
 
         if self.gine_use_spatial_coords and hasattr(self, '_node_coords'):
             coords = self._node_coords.to(device)
@@ -567,19 +568,33 @@ class EnhancedDualBranchModel(nn.Module):
             x_2021_batch = x_2021
             x_2024_batch = x_2024
 
-        # Extract temporal features with multi-scale processing
-        # Returns: (batch_size, hidden_size) - already fused multi-scale features
-        temporal_2021 = self.temporal_branch.extract_features_single(x_2021_batch)
-        temporal_2024 = self.temporal_branch.extract_features_single(x_2024_batch)
+        # Extract sub-scale features for both years before fusion.
+        # This lets us compute temporal_diff at the intermediate representation level
+        # (per time-scale delta) rather than subtracting nearly-identical fused vectors.
+        h_hourly_21, h_daily_21, h_weekly_21 = self.temporal_branch.extract_subscale_features(x_2021_batch)
+        h_hourly_24, h_daily_24, h_weekly_24 = self.temporal_branch.extract_subscale_features(x_2024_batch)
 
-        # Compute temporal difference
-        temporal_diff = temporal_2024 - temporal_2021  # (batch_size, hidden_size)
+        temporal_2021 = self.temporal_branch.fusion(
+            torch.cat([h_hourly_21, h_daily_21, h_weekly_21], dim=1)
+        )
+        temporal_2024 = self.temporal_branch.fusion(
+            torch.cat([h_hourly_24, h_daily_24, h_weekly_24], dim=1)
+        )
+        # diff_fusion has independent weights from fusion to avoid gradient conflict
+        # between absolute-pattern and change-pattern objectives.
+        temporal_diff = self.temporal_branch.diff_fusion(
+            torch.cat([
+                h_hourly_24 - h_hourly_21,
+                h_daily_24  - h_daily_21,
+                h_weekly_24 - h_weekly_21,
+            ], dim=1)
+        )
 
         # Stack temporal features: (batch_size, 3, hidden_size)
         temporal_features = torch.stack([temporal_2021, temporal_2024, temporal_diff], dim=1)
 
         if self.branch_ablation_mode == 'spatial_only':
-            temporal_features = torch.zeros_like(temporal_features)
+            temporal_features = temporal_features * 0.0
 
         if self._mode_requires_raw_temporal(self.spatial_node_feature_mode):
             if raw_x_2021 is None or raw_x_2024 is None:
@@ -589,7 +604,7 @@ class EnhancedDualBranchModel(nn.Module):
 
         # Extract spatial features
         if self.branch_ablation_mode == 'temporal_only':
-            spatial_features = torch.zeros_like(temporal_features)
+            spatial_features = temporal_features * 0.0
         elif self.use_laplacian_pe:
             node_features_2021, node_features_2024 = self._build_gine_node_features(
                 graphs_2021=graphs_2021,

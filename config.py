@@ -15,7 +15,7 @@ DATA_DIR = "data"
 OD_2021_PATH = os.path.join(DATA_DIR, "2021_sgh_week.csv")
 OD_2024_PATH = os.path.join(DATA_DIR, "2024_sgh_week.csv")
 GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "sgh_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "label_i0.095_d3.0_spc500.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "labels_sgh_entropy_0.05_per_450.csv")
 
 # ==============================================================================
 # DATA PREPROCESSING

@@ -2,6 +2,10 @@
 data/
 outputs/
 paper/
+output_analysis/
+graphify-out/
+Debugging/
+
 
 # 可选：忽略输出结果
 
