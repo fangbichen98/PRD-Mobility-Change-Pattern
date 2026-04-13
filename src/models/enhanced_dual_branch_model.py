@@ -82,6 +82,7 @@ class EnhancedDualBranchModel(nn.Module):
         self.temporal_model = temporal_model.upper()
         self.branch_ablation_mode = branch_ablation_mode
         self.fusion_ablation_mode = fusion_ablation_mode
+        self.temporal_subscales = tuple(getattr(config, 'TEMPORAL_SUBSCALES', ('hourly', 'daily', 'weekly')))
         self.spatial_node_feature_mode = getattr(config, 'SPATIAL_NODE_FEATURE_MODE', 'ones')
 
         if self.branch_ablation_mode not in {'full', 'temporal_only', 'spatial_only'}:
@@ -112,6 +113,12 @@ class EnhancedDualBranchModel(nn.Module):
             raise ValueError(
                 f"Unsupported temporal_model={self.temporal_model}. "
                 "Use 'LSTM', 'GRU', 'TCN', 'TRANSFORMER', 'TRANSFORMER_FULL', or 'BIGRU'."
+            )
+
+        if self.temporal_model != 'TRANSFORMER' and self.temporal_subscales != ('hourly', 'daily', 'weekly'):
+            raise ValueError(
+                "TEMPORAL_SUBSCALES override is currently only supported when "
+                "TEMPORAL_MODEL='TRANSFORMER'."
             )
 
         if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
@@ -161,7 +168,8 @@ class EnhancedDualBranchModel(nn.Module):
                 model_dim=config.LSTM_HIDDEN_SIZE,
                 num_layers=config.LSTM_LAYERS,
                 dropout=dropout,
-                daily_agg_mode=daily_agg_mode
+                daily_agg_mode=daily_agg_mode,
+                active_scales=self.temporal_subscales,
             )
         elif self.temporal_model == 'TRANSFORMER_FULL':
             self.temporal_branch = FullMultiScaleTemporalTransformer(

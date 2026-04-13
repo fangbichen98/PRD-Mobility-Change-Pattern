@@ -59,6 +59,8 @@ RANDOM_SEED = 42   # Random seed for reproducibility
 # Multi-Scale Temporal Branch (LSTM-based)
 TEMPORAL_INPUT_SIZE = 2  # Input feature dimension: 
 TEMPORAL_MODEL = "TRANSFORMER"  # Options: "LSTM", "GRU", "TCN", "TRANSFORMER", "TRANSFORMER_FULL", "BIGRU"
+TEMPORAL_SUBSCALES = ("hourly", "daily", "weekly")  # Active temporal subscales for the light Transformer branch
+TEMPORAL_LOG1P = True  # Apply log1p to temporal branch inputs; False = use raw flows (ablation)
 LSTM_LAYERS = 3          # Number of LSTM layers
 LSTM_HIDDEN_SIZE = 256   # LSTM hidden units
 LSTM_DROPOUT = 0.4       # LSTM dropout rate

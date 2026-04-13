@@ -66,6 +66,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+VALID_TEMPORAL_SUBSCALES = ('hourly', 'daily', 'weekly')
+
+
+def parse_temporal_subscales(raw_value):
+    """Parse comma-separated temporal subscales into a normalized tuple."""
+    if raw_value is None:
+        return tuple(getattr(config, 'TEMPORAL_SUBSCALES', VALID_TEMPORAL_SUBSCALES))
+
+    normalized = []
+    for token in str(raw_value).split(','):
+        scale = token.strip().lower()
+        if not scale:
+            continue
+        if scale not in VALID_TEMPORAL_SUBSCALES:
+            raise ValueError(
+                f"Unsupported temporal subscale '{scale}'. Use one of {VALID_TEMPORAL_SUBSCALES}."
+            )
+        if scale not in normalized:
+            normalized.append(scale)
+
+    if not normalized:
+        raise ValueError("At least one temporal subscale must remain enabled.")
+
+    return tuple(normalized)
+
+
+def describe_temporal_subscales(scales):
+    """Human-readable description for active temporal subscales."""
+    normalized = tuple(scales)
+    if normalized == ('hourly',):
+        return 'Single-scale (168h hourly only)'
+    return ' + '.join(scale.capitalize() for scale in normalized)
+
+
 def parse_args():
     """Parse optional runtime overrides for controlled experiment sweeps."""
     parser = argparse.ArgumentParser(description="Train Multi-Scale Temporal + Graph model")
@@ -83,6 +117,10 @@ def parse_args():
                         help='Override temporal branch model')
     parser.add_argument('--temporal-layers', type=int, default=None,
                         help='Override temporal branch layer count for lightweight temporal models')
+    parser.add_argument('--temporal-subscales', type=str, default=None,
+                        help='Comma-separated temporal subscales for the light Transformer branch, e.g. hourly or hourly,daily,weekly')
+    parser.add_argument('--no-temporal-log1p', action='store_true', default=False,
+                        help='Disable log1p pre-processing on temporal branch inputs; use raw flow values instead')
     parser.add_argument('--num-epochs', type=int, default=None,
                         help='Override max number of epochs')
     parser.add_argument('--early-stopping-patience', type=int, default=None,
@@ -502,6 +540,9 @@ def main():
         config.GRAPH_TEMPORAL_MODE = args.graph_temporal_mode
     if args.temporal_layers is not None:
         config.LSTM_LAYERS = args.temporal_layers
+    config.TEMPORAL_SUBSCALES = parse_temporal_subscales(args.temporal_subscales)
+    if args.no_temporal_log1p:
+        config.TEMPORAL_LOG1P = False
     if args.spatial_layers is not None:
         config.SPATIAL_LAYERS = args.spatial_layers
     if args.spatial_hidden_size is not None:
@@ -525,6 +566,9 @@ def main():
     active_gine_edge_feature_mode = (
         config.GINE_EDGE_FEATURE_MODE if spatial_model in ('GINE', 'GAT', 'MPNN') else 'flow_only'
     )
+    temporal_subscales = tuple(config.TEMPORAL_SUBSCALES)
+    temporal_subscale_desc = describe_temporal_subscales(temporal_subscales)
+    temporal_log1p = getattr(config, 'TEMPORAL_LOG1P', True)
 
     # Record start time
     start_time = time.time()
@@ -534,7 +578,7 @@ def main():
     logger.info("Multi-Scale Temporal Branch Training")
     logger.info("=" * 80)
     logger.info(f"Training started at: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("\nImprovement: Multi-Scale Temporal Branch (hourly + daily + weekly)")
+    logger.info(f"\nImprovement: Temporal Branch = {temporal_subscale_desc}")
     logger.info(f"Dataset: {label_path} with flow threshold {config.FLOW_THRESHOLD} and {config.TIME_STEPS} time steps")
     logger.info(
         f"Runtime overrides | spatial_model={spatial_model}, samples_per_class={samples_per_class}, "
@@ -543,6 +587,8 @@ def main():
     )
     logger.info(f"Temporal override | temporal_model={temporal_model}")
     logger.info(f"Temporal layer override | layers={config.LSTM_LAYERS}")
+    logger.info(f"Temporal subscales | active={temporal_subscales}")
+    logger.info(f"Temporal log1p | enabled={temporal_log1p}")
     logger.info(
         f"Graph overrides | topk_out={graph_topk_out}, topk_in={graph_topk_in}, topk_enabled={topk_enabled}"
     )
@@ -609,34 +655,32 @@ def main():
     temporal_features_2024 = {}
 
     _tfm = getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')
-    _tfm = getattr(config, 'TEMPORAL_FEATURE_MODE', 'inflow_outflow')
-    for grid_id, features in data['change_features'].items():
-        if _tfm == 'flow_degree_wamd':
-            # (168, 6) = [flow21, degree21, wamd21, flow24, degree24, wamd24]
-            temporal_features_2021[grid_id] = features[:, [0, 1, 2]]  # (168, 3)
-            temporal_features_2024[grid_id] = features[:, [3, 4, 5]]  # (168, 3)
-        elif _tfm == 'flow_wamd_v2':
-            # (168, 4) = [flow21, wamd21, flow24, wamd24]
-            temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
-            temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
-        else:
-            # inflow_outflow / total_wamd: (168, 4) = [feat0_2021, feat1_2021, feat0_2024, feat1_2024]
-            temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
-            temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
-        if _tfm == 'flow_degree_wamd':
-            # (168, 6) = [flow21, degree21, wamd21, flow24, degree24, wamd24]
-            temporal_features_2021[grid_id] = features[:, [0, 1, 2]]  # (168, 3)
-            temporal_features_2024[grid_id] = features[:, [3, 4, 5]]  # (168, 3)
-        elif _tfm == 'flow_wamd_v2':
-            # (168, 4) = [flow21, wamd21, flow24, wamd24]
-            temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
-            temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
-        else:
-            # inflow_outflow / total_wamd: (168, 4) = [feat0_2021, feat1_2021, feat0_2024, feat1_2024]
-            temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
-            temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
+    _temporal_log1p = getattr(config, 'TEMPORAL_LOG1P', True)
+    if _temporal_log1p:
+        # Use log1p-transformed features from change_features
+        for grid_id, features in data['change_features'].items():
+            if _tfm == 'flow_degree_wamd':
+                # (168, 6) = [flow21, degree21, wamd21, flow24, degree24, wamd24]
+                temporal_features_2021[grid_id] = features[:, [0, 1, 2]]  # (168, 3)
+                temporal_features_2024[grid_id] = features[:, [3, 4, 5]]  # (168, 3)
+            elif _tfm == 'flow_wamd_v2':
+                # (168, 4) = [flow21, wamd21, flow24, wamd24]
+                temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
+                temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
+            else:
+                # inflow_outflow / total_wamd: (168, 4) = [feat0_2021, feat1_2021, feat0_2024, feat1_2024]
+                temporal_features_2021[grid_id] = features[:, [0, 1]]  # (168, 2)
+                temporal_features_2024[grid_id] = features[:, [2, 3]]  # (168, 2)
+    else:
+        # Use raw flows directly (no log1p) from data['flows_2021'] / data['flows_2024']
+        for grid_id, raw21 in data['flows_2021'].items():
+            if grid_id not in data['flows_2024']:
+                continue
+            raw24 = data['flows_2024'][grid_id]
+            temporal_features_2021[grid_id] = raw21  # (168, 2) or (168, 3) depending on _tfm
+            temporal_features_2024[grid_id] = raw24
 
-    logger.info(f"✓ Temporal features prepared")
+    logger.info(f"✓ Temporal features prepared (log1p={'yes' if _temporal_log1p else 'no'})")
 
     # Create dataset
     logger.info("\n" + "=" * 80)
@@ -930,7 +974,7 @@ def main():
     logger.info(f"✓ Enhanced model created")
     logger.info(f"  - Total parameters: {total_params:,}")
     logger.info(f"  - Trainable parameters: {trainable_params:,}")
-    logger.info(f"  - Multi-scale temporal: Hourly + Daily + Weekly")
+    logger.info(f"  - Temporal subscales: {temporal_subscale_desc}")
     logger.info(f"  - Temporal branch model: {temporal_model}")
     logger.info(f"  - Spatial branch: {spatial_model}")
     if spatial_model == "GINE":
@@ -1084,8 +1128,10 @@ def main():
         },
         'model_architecture': {
             'temporal_branch': {
-                'type': f'Multi-scale (hourly + daily + weekly) + {temporal_model}',
+                'type': f'{temporal_subscale_desc} + {temporal_model}',
                 'temporal_model': temporal_model,
+                'temporal_subscales': list(temporal_subscales),
+                'temporal_log1p': temporal_log1p,
                 'temporal_layers': config.LSTM_LAYERS,
                 'lstm_hidden_size': config.LSTM_HIDDEN_SIZE,
                 'lstm_dropout': config.LSTM_DROPOUT,
@@ -1202,8 +1248,9 @@ def main():
         f.write("Model Architecture:\n")
         f.write("-" * 80 + "\n")
         f.write(f"  Temporal Branch:\n")
-        f.write(f"    - Type: Multi-scale (hourly + daily + weekly) + {temporal_model}\n")
+        f.write(f"    - Type: {temporal_subscale_desc} + {temporal_model}\n")
         f.write(f"    - Temporal Model: {temporal_model}\n")
+        f.write(f"    - Temporal Subscales: {', '.join(temporal_subscales)}\n")
         f.write(f"    - Temporal Layers: {config.LSTM_LAYERS}\n")
         f.write(f"    - LSTM Hidden Size: {config.LSTM_HIDDEN_SIZE}\n")
         f.write(f"    - LSTM Dropout: {config.LSTM_DROPOUT}\n")

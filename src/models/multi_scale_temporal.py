@@ -14,6 +14,30 @@ import torch
 import torch.nn as nn
 
 
+VALID_TEMPORAL_SUBSCALES = ("hourly", "daily", "weekly")
+
+
+def _normalize_active_scales(active_scales):
+    if active_scales is None:
+        return VALID_TEMPORAL_SUBSCALES
+
+    normalized = []
+    for scale in active_scales:
+        scale_name = str(scale).strip().lower()
+        if scale_name not in VALID_TEMPORAL_SUBSCALES:
+            raise ValueError(
+                f"Unsupported temporal subscale '{scale_name}'. "
+                f"Use one of {VALID_TEMPORAL_SUBSCALES}."
+            )
+        if scale_name not in normalized:
+            normalized.append(scale_name)
+
+    if not normalized:
+        raise ValueError("At least one temporal subscale must remain enabled.")
+
+    return tuple(normalized)
+
+
 def _aggregate_daily_wamd(x: torch.Tensor) -> torch.Tensor:
     """
     Aggregate hourly [total_h, wamd_h] to daily [total_d, wamd_d].
@@ -595,9 +619,12 @@ class SimplifiedMultiScaleTemporalTransformer(nn.Module):
     """Lightweight Transformer variant of the simplified multi-scale temporal branch."""
 
     def __init__(self, input_size=1, hidden_size=256, model_dim=128, num_layers=2, dropout=0.4,
-                 daily_agg_mode='sum'):
+                 daily_agg_mode='sum', active_scales=None):
         super().__init__()
         self.daily_agg_mode = daily_agg_mode
+        self.hidden_size = hidden_size
+        self.active_scales = _normalize_active_scales(active_scales)
+        self.active_scale_set = set(self.active_scales)
 
         self.in_proj_hourly = nn.Linear(input_size, model_dim)
         self.in_proj_daily  = nn.Linear(input_size, model_dim)
@@ -657,35 +684,46 @@ class SimplifiedMultiScaleTemporalTransformer(nn.Module):
             h_daily:  (batch, hidden_size)
             h_weekly: (batch, hidden_size)
         """
+        zero_feature = x.new_zeros((x.size(0), self.hidden_size))
+
         # hourly
-        x_hourly = self.pos_hourly(self.in_proj_hourly(x))
-        h_hourly = self.hourly_encoder(x_hourly).mean(dim=1)
-        h_hourly = self.proj_hourly(h_hourly)
+        if 'hourly' in self.active_scale_set:
+            x_hourly = self.pos_hourly(self.in_proj_hourly(x))
+            h_hourly = self.hourly_encoder(x_hourly).mean(dim=1)
+            h_hourly = self.proj_hourly(h_hourly)
+        else:
+            h_hourly = zero_feature
 
         # daily aggregation
-        if self.daily_agg_mode == 'wamd':
-            x_daily = _aggregate_daily_wamd(x)
-        elif self.daily_agg_mode == 'sum_fdw':
-            x_daily = _aggregate_daily_flow_degree_wamd(x, agg_mode='sum')
-        elif self.daily_agg_mode == 'mean_fdw':
-            x_daily = _aggregate_daily_flow_degree_wamd(x, agg_mode='mean')
+        if 'daily' in self.active_scale_set:
+            if self.daily_agg_mode == 'wamd':
+                x_daily = _aggregate_daily_wamd(x)
+            elif self.daily_agg_mode == 'sum_fdw':
+                x_daily = _aggregate_daily_flow_degree_wamd(x, agg_mode='sum')
+            elif self.daily_agg_mode == 'mean_fdw':
+                x_daily = _aggregate_daily_flow_degree_wamd(x, agg_mode='mean')
+            else:
+                x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
+            x_daily = self.pos_daily(self.in_proj_daily(x_daily))
+            h_daily = self.daily_encoder(x_daily).mean(dim=1)
+            h_daily = self.proj_daily(h_daily)
         else:
-            x_daily = x.view(x.size(0), 7, 24, x.size(2)).sum(dim=2)
-        x_daily = self.pos_daily(self.in_proj_daily(x_daily))
-        h_daily = self.daily_encoder(x_daily).mean(dim=1)
-        h_daily = self.proj_daily(h_daily)
+            h_daily = zero_feature
 
         # weekly stats
-        if self.daily_agg_mode in ('sum_fdw', 'mean_fdw'):
-            agg_mode = 'sum' if self.daily_agg_mode == 'sum_fdw' else 'mean'
-            weekly_stats = _aggregate_weekly_flow_degree_wamd(x, agg_mode=agg_mode).squeeze(1)  # (b, 3)
+        if 'weekly' in self.active_scale_set:
+            if self.daily_agg_mode in ('sum_fdw', 'mean_fdw'):
+                agg_mode = 'sum' if self.daily_agg_mode == 'sum_fdw' else 'mean'
+                weekly_stats = _aggregate_weekly_flow_degree_wamd(x, agg_mode=agg_mode).squeeze(1)  # (b, 3)
+            else:
+                weekly_sum  = x.sum(dim=1)
+                weekly_max  = x.max(dim=1)[0]
+                weekly_mean = x.mean(dim=1)
+                trend       = (x[:, -1, :] - x[:, 0, :]) / 168
+                weekly_stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
+            h_weekly = self.weekly_net(weekly_stats)
         else:
-            weekly_sum  = x.sum(dim=1)
-            weekly_max  = x.max(dim=1)[0]
-            weekly_mean = x.mean(dim=1)
-            trend       = (x[:, -1, :] - x[:, 0, :]) / 168
-            weekly_stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
-        h_weekly = self.weekly_net(weekly_stats)
+            h_weekly = zero_feature
 
         return h_hourly, h_daily, h_weekly
 
