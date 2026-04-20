@@ -5,6 +5,7 @@ paper/
 output_analysis/
 graphify-out/
 Debugging/
+cache/
 
 
 # 可选：忽略输出结果

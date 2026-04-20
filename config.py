@@ -15,7 +15,7 @@ DATA_DIR = "data"
 OD_2021_PATH = os.path.join(DATA_DIR, "2021_sgh_week.csv")
 OD_2024_PATH = os.path.join(DATA_DIR, "2024_sgh_week.csv")
 GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "sgh_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "labels_sgh_entropy_0.05_per_450.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "sampled_labels_spc250_seed202_reconstructed.csv")
 
 # ==============================================================================
 # DATA PREPROCESSING
@@ -61,6 +61,7 @@ TEMPORAL_INPUT_SIZE = 2  # Input feature dimension:
 TEMPORAL_MODEL = "TRANSFORMER"  # Options: "LSTM", "GRU", "TCN", "TRANSFORMER", "TRANSFORMER_FULL", "BIGRU"
 TEMPORAL_SUBSCALES = ("hourly", "daily", "weekly")  # Active temporal subscales for the light Transformer branch
 TEMPORAL_LOG1P = True  # Apply log1p to temporal branch inputs; False = use raw flows (ablation)
+TEMPORAL_INSTANCE_NORM = True  # Per-instance normalization before temporal encoding (fixes weekly-scale L2 explosion)
 LSTM_LAYERS = 3          # Number of LSTM layers
 LSTM_HIDDEN_SIZE = 256   # LSTM hidden units
 LSTM_DROPOUT = 0.4       # LSTM dropout rate

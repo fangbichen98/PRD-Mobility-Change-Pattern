@@ -121,6 +121,8 @@ def parse_args():
                         help='Comma-separated temporal subscales for the light Transformer branch, e.g. hourly or hourly,daily,weekly')
     parser.add_argument('--no-temporal-log1p', action='store_true', default=False,
                         help='Disable log1p pre-processing on temporal branch inputs; use raw flow values instead')
+    parser.add_argument('--no-temporal-instance-norm', action='store_true', default=False,
+                        help='Disable per-instance normalization in the temporal branch (ablation; reverts to old weekly-scale behavior)')
     parser.add_argument('--num-epochs', type=int, default=None,
                         help='Override max number of epochs')
     parser.add_argument('--early-stopping-patience', type=int, default=None,
@@ -543,6 +545,8 @@ def main():
     config.TEMPORAL_SUBSCALES = parse_temporal_subscales(args.temporal_subscales)
     if args.no_temporal_log1p:
         config.TEMPORAL_LOG1P = False
+    if args.no_temporal_instance_norm:
+        config.TEMPORAL_INSTANCE_NORM = False
     if args.spatial_layers is not None:
         config.SPATIAL_LAYERS = args.spatial_layers
     if args.spatial_hidden_size is not None:
@@ -569,6 +573,7 @@ def main():
     temporal_subscales = tuple(config.TEMPORAL_SUBSCALES)
     temporal_subscale_desc = describe_temporal_subscales(temporal_subscales)
     temporal_log1p = getattr(config, 'TEMPORAL_LOG1P', True)
+    temporal_instance_norm = getattr(config, 'TEMPORAL_INSTANCE_NORM', True)
 
     # Record start time
     start_time = time.time()
@@ -589,6 +594,7 @@ def main():
     logger.info(f"Temporal layer override | layers={config.LSTM_LAYERS}")
     logger.info(f"Temporal subscales | active={temporal_subscales}")
     logger.info(f"Temporal log1p | enabled={temporal_log1p}")
+    logger.info(f"Temporal instance norm | enabled={temporal_instance_norm}")
     logger.info(
         f"Graph overrides | topk_out={graph_topk_out}, topk_in={graph_topk_in}, topk_enabled={topk_enabled}"
     )
@@ -1132,6 +1138,7 @@ def main():
                 'temporal_model': temporal_model,
                 'temporal_subscales': list(temporal_subscales),
                 'temporal_log1p': temporal_log1p,
+                'temporal_instance_norm': temporal_instance_norm,
                 'temporal_layers': config.LSTM_LAYERS,
                 'lstm_hidden_size': config.LSTM_HIDDEN_SIZE,
                 'lstm_dropout': config.LSTM_DROPOUT,

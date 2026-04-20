@@ -716,11 +716,13 @@ class SimplifiedMultiScaleTemporalTransformer(nn.Module):
                 agg_mode = 'sum' if self.daily_agg_mode == 'sum_fdw' else 'mean'
                 weekly_stats = _aggregate_weekly_flow_degree_wamd(x, agg_mode=agg_mode).squeeze(1)  # (b, 3)
             else:
-                weekly_sum  = x.sum(dim=1)
+                # std replaces sum: removes L2 explosion (sum ≈ 146-380 vs max/mean ≈ 1-3)
+                # while adding temporal variability information (regularity of the pattern).
+                weekly_std  = x.std(dim=1)
                 weekly_max  = x.max(dim=1)[0]
                 weekly_mean = x.mean(dim=1)
                 trend       = (x[:, -1, :] - x[:, 0, :]) / 168
-                weekly_stats = torch.cat([weekly_sum, weekly_max, weekly_mean, trend], dim=1)
+                weekly_stats = torch.cat([weekly_std, weekly_max, weekly_mean, trend], dim=1)
             h_weekly = self.weekly_net(weekly_stats)
         else:
             h_weekly = zero_feature
