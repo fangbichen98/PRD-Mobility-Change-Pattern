@@ -81,7 +81,7 @@ class PureGraphDualYearGINE(nn.Module):
             node_mlp = nn.Sequential(
                 nn.Linear(in_channels, hidden_size),
                 nn.BatchNorm1d(hidden_size),
-                nn.ReLU(),
+                nn.GELU(),
                 nn.Linear(hidden_size, hidden_size)
             )
 
@@ -102,7 +102,7 @@ class PureGraphDualYearGINE(nn.Module):
         # Output projection: hidden_size -> output_size
         self.output_proj = nn.Linear(hidden_size, output_size)
         self.dropout = nn.Dropout(dropout)
-        self.act = F.relu
+        self.act = F.gelu
 
     def _normalize_edge_attr(self, edge_attr: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         """

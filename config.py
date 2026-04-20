@@ -132,7 +132,7 @@ BATCH_SIZE = 12          # Batch size for training (reduced for memory)
 LEARNING_RATE = 0.0001    # Initial learning rate
 WEIGHT_DECAY = 1e-3       # L2 regularization
 NUM_EPOCHS = 300          # Maximum number of training epochs
-EARLY_STOPPING_PATIENCE =20  # Stop if no improvement for N epochs
+EARLY_STOPPING_PATIENCE =10  # Stop if no improvement for N epochs
 GRADIENT_ACCUMULATION = 4  # Effective batch = BATCH_SIZE * GRADIENT_ACCUMULATION
 SCHEDULER_PATIENCE = 5     # ReduceLROnPlateau patience
 SCHEDULER_FACTOR = 0.5     # ReduceLROnPlateau factor
