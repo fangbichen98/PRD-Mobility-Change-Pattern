@@ -459,16 +459,10 @@ class EnhancedDualBranchModel(nn.Module):
             features_2021 = torch.cat([features_2021, raw_graph_stats_2021], dim=1)
             features_2024 = torch.cat([features_2024, raw_graph_stats_2024], dim=1)
         elif self.spatial_node_feature_mode == 'raw_temporal_mean':
-            # Use the flow change (delta) rather than absolute yearly means.
-            # This separates responsibilities: temporal branch handles absolute patterns
-            # via the full 168-step sequence; spatial branch propagates the change signal
-            # through the graph. Both features_2021 and features_2024 receive the same
-            # delta_mean so year differentiation falls on LapPE and edge OD flows.
             raw_mean_2021 = torch.log1p(raw_x_2021.mean(dim=1))  # (N, 2)
             raw_mean_2024 = torch.log1p(raw_x_2024.mean(dim=1))  # (N, 2)
-            delta_mean = raw_mean_2024 - raw_mean_2021             # (N, 2)
-            features_2021 = torch.cat([features_2021, delta_mean], dim=1)
-            features_2024 = torch.cat([features_2024, delta_mean], dim=1)
+            features_2021 = torch.cat([features_2021, raw_mean_2021], dim=1)
+            features_2024 = torch.cat([features_2024, raw_mean_2024], dim=1)
         elif self.spatial_node_feature_mode == 'flow_wamd':
             if not hasattr(self, '_wamd_node_features_2021'):
                 raise ValueError("flow_wamd mode requires register_wamd_node_features() to be called first")
