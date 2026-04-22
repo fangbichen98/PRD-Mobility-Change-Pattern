@@ -15,7 +15,7 @@ DATA_DIR = "data"
 OD_2021_PATH = os.path.join(DATA_DIR, "2021_sgh_week.csv")
 OD_2024_PATH = os.path.join(DATA_DIR, "2024_sgh_week.csv")
 GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "sgh_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "sampled_labels_spc250_seed202_reconstructed.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "labels_sgh_entropy_0.09_per300.csv")
 
 # ==============================================================================
 # DATA PREPROCESSING
@@ -59,7 +59,7 @@ RANDOM_SEED = 42   # Random seed for reproducibility
 # Multi-Scale Temporal Branch (LSTM-based)
 TEMPORAL_INPUT_SIZE = 2  # Input feature dimension: 
 TEMPORAL_MODEL = "TRANSFORMER"  # Options: "LSTM", "GRU", "TCN", "TRANSFORMER", "TRANSFORMER_FULL", "BIGRU"
-TEMPORAL_SUBSCALES = ("hourly", "daily", "weekly")  # Active temporal subscales for the light Transformer branch
+TEMPORAL_SUBSCALES = ("hourly", "daily","weekly")  # Active temporal subscales for the light Transformer branch
 TEMPORAL_LOG1P = True  # Apply log1p to temporal branch inputs; False = use raw flows (ablation)
 TEMPORAL_INSTANCE_NORM = True  # Per-instance normalization before temporal encoding (fixes weekly-scale L2 explosion)
 LSTM_LAYERS = 3          # Number of LSTM layers
@@ -112,7 +112,7 @@ DAILY_AGG_MODE = "sum"
 SPATIAL_NODE_FEATURE_MODE = "raw_temporal_mean"
 # Whether to concatenate normalized (lon, lat) spatial coordinates into GINE node features.
 # Only effective when SPATIAL_MODEL="GINE". Adds 2 extra input dimensions alongside Laplacian PE.
-GINE_USE_SPATIAL_COORDS = True
+GINE_USE_SPATIAL_COORDS = False
 # Note: GCN doesn't use attention heads (unlike GAT)
 # Legacy GAT_* parameters are kept for backward compatibility
 SPATIAL_HEADS = 4            # Deprecated: Not used by GCN (only for GAT)
@@ -128,13 +128,13 @@ NUM_CLASSES = 9           # Number of output classes (9 mobility patterns)
 # ==============================================================================
 # TRAINING HYPERPARAMETERS
 # ==============================================================================
-BATCH_SIZE = 12          # Batch size for training (reduced for memory)
+BATCH_SIZE = 16         # Batch size for training (reduced for memory)
 LEARNING_RATE = 0.0001    # Initial learning rate
 WEIGHT_DECAY = 1e-3       # L2 regularization
 NUM_EPOCHS = 300          # Maximum number of training epochs
-EARLY_STOPPING_PATIENCE =20  # Stop if no improvement for N epochs
+EARLY_STOPPING_PATIENCE =30  # Stop if no improvement for N epochs
 GRADIENT_ACCUMULATION = 4  # Effective batch = BATCH_SIZE * GRADIENT_ACCUMULATION
-SCHEDULER_PATIENCE = 5     # ReduceLROnPlateau patience
+SCHEDULER_PATIENCE = 10     # ReduceLROnPlateau patience
 SCHEDULER_FACTOR = 0.5     # ReduceLROnPlateau factor
 
 # ==============================================================================
@@ -168,6 +168,7 @@ Used in train_multiscale_temporal.py:
 22. GAT_HIDDEN_SIZE     - Deprecated: Use SPATIAL_HIDDEN_SIZE instead
 23. GAT_HEADS           - Deprecated: Not used by GCN
 24. ATTENTION_HEADS     - Fusion layer architecture
+
 25. ADD_SELF_LOOPS      - Graph construction (self-loops for isolated nodes)
 26. SELF_LOOP_WEIGHT    - Weight for self-loop edges
 27. USE_KNN_FALLBACK    - Use KNN fallback for isolated nodes

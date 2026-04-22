@@ -450,8 +450,8 @@ class EnhancedDualBranchModel(nn.Module):
     def _build_gine_node_features(self, graphs_2021, graphs_2024, num_nodes, raw_x_2021, raw_x_2024, device):
         self.compute_laplacian_pe_if_needed(graphs_2021, graphs_2024, num_nodes, device)
 
-        features_2021 = self.laplacian_pe_2021
-        features_2024 = self.laplacian_pe_2024
+        features_2021 = self._zscore_node_features(self.laplacian_pe_2021)
+        features_2024 = self._zscore_node_features(self.laplacian_pe_2024)
 
         if self.spatial_node_feature_mode == 'raw_temporal_graph_stats':
             raw_graph_stats_2021 = self._compute_raw_temporal_graph_stats(raw_x_2021, graphs_2021, num_nodes)
