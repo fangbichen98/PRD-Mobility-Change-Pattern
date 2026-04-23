@@ -1018,7 +1018,6 @@ def main():
         f"factor={scheduler_factor})"
     )
     logger.info(f"  - Loss: {loss_desc}")
-    logger.info(f"  - Loss: {loss_desc}")
 
     # Training loop
     logger.info("\n" + "=" * 80)
@@ -1105,9 +1104,6 @@ def main():
     logger.info(f"  - F1 Score: {test_metrics['f1']:.4f}")
 
     # Save test results with detailed configuration
-    test_kappa = cohen_kappa_score(test_metrics['all_labels'], test_metrics['all_preds'])
-    logger.info(f"  - Kappa: {test_kappa:.4f}")
-
     test_kappa = cohen_kappa_score(test_metrics['all_labels'], test_metrics['all_preds'])
     logger.info(f"  - Kappa: {test_kappa:.4f}")
 

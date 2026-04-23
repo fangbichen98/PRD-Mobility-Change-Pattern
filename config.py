@@ -15,7 +15,7 @@ DATA_DIR = "data"
 OD_2021_PATH = os.path.join(DATA_DIR, "2021_sgh_week.csv")
 OD_2024_PATH = os.path.join(DATA_DIR, "2024_sgh_week.csv")
 GRID_METADATA_PATH = os.path.join(DATA_DIR, "grid_metadata", "sgh_grid_metadata.csv")
-LABEL_PATH = os.path.join(DATA_DIR, "labels_sgh_entropy_0.09_per300.csv")
+LABEL_PATH = os.path.join(DATA_DIR, "labels_sgh_entropy_0.12_per250.csv")
 
 # ==============================================================================
 # DATA PREPROCESSING
@@ -134,7 +134,7 @@ WEIGHT_DECAY = 1e-3       # L2 regularization
 NUM_EPOCHS = 300          # Maximum number of training epochs
 EARLY_STOPPING_PATIENCE =30  # Stop if no improvement for N epochs
 GRADIENT_ACCUMULATION = 4  # Effective batch = BATCH_SIZE * GRADIENT_ACCUMULATION
-SCHEDULER_PATIENCE = 10     # ReduceLROnPlateau patience
+SCHEDULER_PATIENCE = 20     # ReduceLROnPlateau patience
 SCHEDULER_FACTOR = 0.5     # ReduceLROnPlateau factor
 
 # ==============================================================================
