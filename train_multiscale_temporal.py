@@ -181,6 +181,9 @@ def parse_args():
     parser.add_argument('--focal-loss-gamma', type=float, default=None,
                         help='Use Focal Loss with this gamma value instead of CrossEntropy. '
                              'Recommended: 2.0. None (default) = standard weighted CrossEntropy.')
+    parser.add_argument('--label-smoothing', type=float, default=0.15,
+                        help='Label smoothing epsilon for CrossEntropyLoss (default: 0.0 = no smoothing). '
+                             'Recommended: 0.1.')
     return parser.parse_args()
 
 
@@ -551,6 +554,7 @@ def main():
         config.LAPLACIAN_PE_DIM = args.laplacian_pe_dim
 
     focal_loss_gamma = args.focal_loss_gamma  # None → CrossEntropy, float → FocalLoss
+    label_smoothing = args.label_smoothing
     if args.spatial_layers is not None:
         config.SPATIAL_LAYERS = args.spatial_layers
     if args.spatial_hidden_size is not None:
@@ -992,14 +996,8 @@ def main():
         criterion = FocalLoss(gamma=focal_loss_gamma, weight=class_weights)
         loss_desc = f"Focal Loss (gamma={focal_loss_gamma}, weighted)"
     else:
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
-        loss_desc = "Weighted CrossEntropy"
-    if focal_loss_gamma is not None:
-        criterion = FocalLoss(gamma=focal_loss_gamma, weight=class_weights)
-        loss_desc = f"Focal Loss (gamma={focal_loss_gamma}, weighted)"
-    else:
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
-        loss_desc = "Weighted CrossEntropy"
+        criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
+        loss_desc = f"Weighted CrossEntropy (label_smoothing={label_smoothing})"
 
     # Optimizer and scheduler
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=config.WEIGHT_DECAY)
@@ -1017,6 +1015,7 @@ def main():
         f"  - Scheduler: ReduceLROnPlateau (patience={scheduler_patience}, "
         f"factor={scheduler_factor})"
     )
+    logger.info(f"  - Loss: {loss_desc}")
     logger.info(f"  - Loss: {loss_desc}")
 
     # Training loop
@@ -1104,6 +1103,9 @@ def main():
     logger.info(f"  - F1 Score: {test_metrics['f1']:.4f}")
 
     # Save test results with detailed configuration
+    test_kappa = cohen_kappa_score(test_metrics['all_labels'], test_metrics['all_preds'])
+    logger.info(f"  - Kappa: {test_kappa:.4f}")
+
     test_kappa = cohen_kappa_score(test_metrics['all_labels'], test_metrics['all_preds'])
     logger.info(f"  - Kappa: {test_kappa:.4f}")
 
